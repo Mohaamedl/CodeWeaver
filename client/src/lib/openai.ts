@@ -33,7 +33,8 @@ export const openaiApi = {
   }> {
     try {
       const response = await apiRequest('POST', `/api/assistant/conversations/${conversationId}/messages`, {
-        message,
+        content: message,
+        role: 'user'
       });
 
       const data = await response.json();

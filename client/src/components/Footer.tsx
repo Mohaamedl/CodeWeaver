@@ -7,37 +7,37 @@ const Footer = () => {
         <nav className="-mx-5 -my-2 flex flex-wrap justify-center" aria-label="Footer">
           <div className="px-5 py-2">
             <Link href="/">
-              <a className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300">
+              <span className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300 cursor-pointer">
                 Features
-              </a>
+              </span>
             </Link>
           </div>
           <div className="px-5 py-2">
             <Link href="/">
-              <a className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300">
+              <span className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300 cursor-pointer">
                 Documentation
-              </a>
+              </span>
             </Link>
           </div>
           <div className="px-5 py-2">
             <Link href="/">
-              <a className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300">
+              <span className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300 cursor-pointer">
                 API
-              </a>
+              </span>
             </Link>
           </div>
           <div className="px-5 py-2">
             <Link href="/">
-              <a className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300">
+              <span className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300 cursor-pointer">
                 Blog
-              </a>
+              </span>
             </Link>
           </div>
           <div className="px-5 py-2">
             <Link href="/">
-              <a className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300">
+              <span className="text-base text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300 cursor-pointer">
                 Contact
-              </a>
+              </span>
             </Link>
           </div>
         </nav>

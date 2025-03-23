@@ -65,13 +65,18 @@ const AssistantChat = ({ onComplete }: AssistantChatProps) => {
   // Send message mutation
   const sendMessage = useMutation({
     mutationFn: async ({ message, convoId }: { message: string; convoId: number }) => {
-      const response = await apiRequest('POST', `/api/assistant/conversations/${convoId}/messages`, { message });
+      const response = await apiRequest('POST', `/api/assistant/conversations/${convoId}/messages`, { 
+        content: message,
+        role: 'user'
+      });
       return response.json();
     },
     onSuccess: (data) => {
       if (data.message) {
         setIsTyping(false);
-        setMessages((prev) => [...prev, { role: 'assistant', content: data.message }]);
+        // Check if the response has content property directly or nested in message object
+        const assistantContent = data.message.content || data.message;
+        setMessages((prev) => [...prev, { role: 'assistant', content: assistantContent }]);
         
         // Check if we should generate plan (typically after 10+ messages)
         if (messages.length >= 20) {

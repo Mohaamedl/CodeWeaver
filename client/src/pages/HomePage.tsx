@@ -1,14 +1,26 @@
 import { Code, MessageSquare, LayoutTemplate } from 'lucide-react';
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { FeatureCard } from '@/components/ui/feature-card';
 import { StepCard } from '@/components/ui/step-card';
 import { useAuth } from '@/hooks/useAuth';
 import { useNotification } from '@/components/Notification';
+import { useEffect } from 'react';
 
 const HomePage = () => {
   const { isAuthenticated, login } = useAuth();
   const { showNotification } = useNotification();
+  const [location] = useLocation();
+  
+  // Check for authError query parameter
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('authError')) {
+      showNotification('GitHub authentication failed. Please try again.', 'error');
+      // Remove the query parameter to prevent showing the error message again on refresh
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [showNotification]);
 
   const handleCodebaseClick = (e: React.MouseEvent) => {
     if (!isAuthenticated) {

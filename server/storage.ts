@@ -23,12 +23,12 @@ export interface IStorage {
   // Assistant conversation operations
   createAssistantConversation(conversation: InsertAssistantConversation): Promise<AssistantConversation>;
   getAssistantConversations(userId: number): Promise<AssistantConversation[]>;
-  getAssistantConversationById(id: number): Promise<AssistantConversation | undefined>;
-  updateAssistantConversation(id: number, data: Partial<InsertAssistantConversation>): Promise<AssistantConversation | undefined>;
+  getAssistantConversationById(id: number | string): Promise<AssistantConversation | undefined>;
+  updateAssistantConversation(id: number | string, data: Partial<InsertAssistantConversation>): Promise<AssistantConversation | undefined>;
 
   // Assistant message operations
   createAssistantMessage(message: InsertAssistantMessage): Promise<AssistantMessage>;
-  getAssistantMessagesByConversationId(conversationId: number): Promise<AssistantMessage[]>;
+  getAssistantMessagesByConversationId(conversationId: number | string): Promise<AssistantMessage[]>;
 
   // Architectural plan operations
   createArchitecturalPlan(plan: InsertArchitecturalPlan): Promise<ArchitecturalPlan>;
@@ -171,25 +171,28 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async getAssistantConversationById(id: number): Promise<AssistantConversation | undefined> {
-    return this.assistantConversations.get(id);
+  async getAssistantConversationById(id: number | string): Promise<AssistantConversation | undefined> {
+    const numericId = typeof id === 'string' ? parseInt(id) : id;
+    return this.assistantConversations.get(numericId);
   }
 
-  async updateAssistantConversation(id: number, data: Partial<InsertAssistantConversation>): Promise<AssistantConversation | undefined> {
-    const conversation = this.assistantConversations.get(id);
+  async updateAssistantConversation(id: number | string, data: Partial<InsertAssistantConversation>): Promise<AssistantConversation | undefined> {
+    const numericId = typeof id === 'string' ? parseInt(id) : id;
+    const conversation = this.assistantConversations.get(numericId);
     if (!conversation) return undefined;
 
-    // Construct a properly typed updated conversation object
+    // Create updated conversation with safe type casting
     const updatedConversation: AssistantConversation = {
       ...conversation,
-      // Only include fields that are actually in data
-      userId: data.userId !== undefined ? data.userId : conversation.userId,
       experienceLevel: data.experienceLevel !== undefined ? data.experienceLevel : conversation.experienceLevel,
       projectObjective: data.projectObjective !== undefined ? data.projectObjective : conversation.projectObjective,
       technologyStack: data.technologyStack !== undefined ? data.technologyStack : conversation.technologyStack,
+      // Handle the completed property from the data object 
+      // Since it's coming from a Partial<InsertAssistantConversation> we need to cast it
+      completed: (data as any).completed !== undefined ? (data as any).completed : conversation.completed,
     };
 
-    this.assistantConversations.set(id, updatedConversation);
+    this.assistantConversations.set(numericId, updatedConversation);
     return updatedConversation;
   }
 
@@ -198,10 +201,15 @@ export class MemStorage implements IStorage {
     const id = this.currentAssistantMessageId++;
     const now = new Date();
     
+    // Convert conversationId to number if it's a string
+    const conversationId = typeof message.conversationId === 'string' 
+      ? parseInt(message.conversationId) 
+      : message.conversationId;
+    
     // Ensure all required fields are set with proper defaults
     const assistantMessage: AssistantMessage = {
       id,
-      conversationId: message.conversationId !== undefined ? message.conversationId : null,
+      conversationId: conversationId !== undefined ? conversationId : null,
       role: message.role,
       content: message.content,
       timestamp: now
@@ -211,11 +219,11 @@ export class MemStorage implements IStorage {
     return assistantMessage;
   }
 
-  async getAssistantMessagesByConversationId(conversationId: number): Promise<AssistantMessage[]> {
+  async getAssistantMessagesByConversationId(conversationId: number | string): Promise<AssistantMessage[]> {
+    const numericId = typeof conversationId === 'string' ? parseInt(conversationId) : conversationId;
     return Array.from(this.assistantMessages.values())
-      .filter((message) => message.conversationId === conversationId)
+      .filter((message) => message.conversationId === numericId)
       .sort((a, b) => {
-        // Handle null timestamps safely
         const timeA = a.timestamp ? a.timestamp.getTime() : 0;
         const timeB = b.timestamp ? b.timestamp.getTime() : 0;
         return timeA - timeB;

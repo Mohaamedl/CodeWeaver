@@ -45,14 +45,8 @@ export class GitHubController {
         req.session.githubAccessToken = accessToken;
       }
 
-      return res.status(200).json({
-        message: 'GitHub authentication successful',
-        user: {
-          id: user?.id,
-          username: user?.username,
-          githubUsername: user?.githubUsername,
-        }
-      });
+      // Redirect to codebase page instead of returning JSON
+      return res.redirect(`${process.env.APP_BASE_URL}/codebase`);
     } catch (error: any) {
       console.error('GitHub OAuth error:', error.message);
       // Provide more detailed error information to help debug
@@ -61,11 +55,8 @@ export class GitHubController {
         redirectUri: `${process.env.APP_BASE_URL}/api/auth/github/callback`,
         appBaseUrl: process.env.APP_BASE_URL
       });
-      return res.status(500).json({ 
-        message: 'GitHub authentication failed',
-        details: 'Make sure your GitHub OAuth app settings match the callback URL in your application.',
-        error: error.message
-      });
+      // Redirect to home page with error
+      return res.redirect(`${process.env.APP_BASE_URL}?authError=true`);
     }
   }
 

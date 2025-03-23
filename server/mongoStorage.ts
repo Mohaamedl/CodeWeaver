@@ -152,9 +152,11 @@ export class MongoStorage implements IStorage {
     }
   }
 
-  async getAssistantConversationById(id: number): Promise<AssistantConversation | undefined> {
+  async getAssistantConversationById(id: number | string): Promise<AssistantConversation | undefined> {
     try {
-      const conversation = await AssistantConversationModel.findById(id);
+      // Convert string ID to MongoDB ObjectId if needed
+      const objectId = typeof id === 'string' ? id : id.toString();
+      const conversation = await AssistantConversationModel.findById(objectId);
       if (!conversation) return undefined;
       
       return this.convertToAssistantConversation(conversation);
@@ -164,9 +166,11 @@ export class MongoStorage implements IStorage {
     }
   }
 
-  async updateAssistantConversation(id: number, data: Partial<InsertAssistantConversation>): Promise<AssistantConversation | undefined> {
+  async updateAssistantConversation(id: number | string, data: Partial<InsertAssistantConversation>): Promise<AssistantConversation | undefined> {
     try {
-      const conversation = await AssistantConversationModel.findByIdAndUpdate(id, data, { new: true });
+      // Convert number ID to MongoDB ObjectId if needed
+      const objectId = typeof id === 'string' ? id : id.toString();
+      const conversation = await AssistantConversationModel.findByIdAndUpdate(objectId, data, { new: true });
       if (!conversation) return undefined;
       
       return this.convertToAssistantConversation(conversation);
@@ -179,7 +183,13 @@ export class MongoStorage implements IStorage {
   // Assistant message operations
   async createAssistantMessage(message: InsertAssistantMessage): Promise<AssistantMessage> {
     try {
-      const newMessage = await AssistantMessageModel.create(message);
+      // Ensure conversationId is handled correctly for MongoDB
+      const messageData = {
+        ...message,
+        conversationId: typeof message.conversationId === 'number' ? message.conversationId.toString() : message.conversationId
+      };
+      
+      const newMessage = await AssistantMessageModel.create(messageData);
       return this.convertToAssistantMessage(newMessage);
     } catch (error: any) {
       log(`Error creating assistant message: ${error.message}`, 'mongo-storage');
@@ -187,9 +197,11 @@ export class MongoStorage implements IStorage {
     }
   }
 
-  async getAssistantMessagesByConversationId(conversationId: number): Promise<AssistantMessage[]> {
+  async getAssistantMessagesByConversationId(conversationId: number | string): Promise<AssistantMessage[]> {
     try {
-      const messages = await AssistantMessageModel.find({ conversationId }).sort({ timestamp: 1 });
+      // Convert number ID to MongoDB ObjectId if needed
+      const objectId = typeof conversationId === 'string' ? conversationId : conversationId.toString();
+      const messages = await AssistantMessageModel.find({ conversationId: objectId }).sort({ timestamp: 1 });
       return messages.map(this.convertToAssistantMessage);
     } catch (error: any) {
       log(`Error fetching assistant messages: ${error.message}`, 'mongo-storage');

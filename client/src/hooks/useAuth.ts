@@ -58,7 +58,18 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       }
     };
     
+    // Check auth status on mount
     checkAuthStatus();
+    
+    // Also check when URL changes - this helps refresh auth state after redirect
+    const handleUrlChange = () => {
+      checkAuthStatus();
+    };
+    
+    window.addEventListener('popstate', handleUrlChange);
+    return () => {
+      window.removeEventListener('popstate', handleUrlChange);
+    };
   }, []);
 
   const login = () => {

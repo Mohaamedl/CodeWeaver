@@ -4,9 +4,41 @@ import { setupVite, serveStatic, log } from "./vite";
 import dotenv from "dotenv";
 import database from "./database";
 import { storage, createStorage } from "./storage";
+import path from "path";
+import fs from "fs";
+import openaiService from "./services/openaiService";
 
 // Load environment variables from .env
-dotenv.config();
+console.log("Current working directory:", process.cwd());
+const envPath = path.resolve(process.cwd(), '.env');
+console.log("Looking for .env file at:", envPath);
+console.log(".env file exists:", fs.existsSync(envPath));
+
+// Try to load the .env file directly
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf8');
+  console.log(".env file content preview (first 100 chars):", envContent.substring(0, 100));
+}
+
+// Load environment variables before any other imports that might use them
+const result = dotenv.config();
+if (result.error) {
+  console.error("Error loading .env file:", result.error);
+} else {
+  console.log("Successfully loaded .env file");
+}
+
+// Debug environment variables
+console.log("Environment Variables Check:");
+console.log("OPENAI_API_KEY exists:", !!process.env.OPENAI_API_KEY);
+console.log("OPENAI_API_KEY length:", process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0);
+console.log("OPENAI_API_KEY prefix:", process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 8) : "N/A");
+console.log("PORT:", process.env.PORT);
+console.log("APP_BASE_URL:", process.env.APP_BASE_URL);
+console.log("MONGO_URI exists:", !!process.env.MONGO_URI);
+
+// Initialize the OpenAI service with loaded environment variables
+openaiService.initialize();
 
 const app = express();
 app.use(express.json());
