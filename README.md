@@ -64,7 +64,7 @@ The application helps developers understand complex codebases, identify architec
 
 ```bash
 # Clone the repository
-git clone <your-repository-url>
+git clone https://github.com/Mohaamedl/CodeWeaver.git
 cd codeweaver
 
 # Install dependencies
