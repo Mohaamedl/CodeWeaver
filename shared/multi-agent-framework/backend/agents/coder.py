@@ -53,7 +53,7 @@ class CoderAgent:
             user_msg = {"role": "user", "content": user_content}
 
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini",
                 messages=[system_msg, user_msg]
             )
             return response['choices'][0]['message']['content']

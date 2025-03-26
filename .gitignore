@@ -11,3 +11,6 @@ vite.config.ts.*
 .env.development
 .env.test
 .env.production
+__pycache__/
+.venv/
+shared/multi-agent-framework/backend/db/database.db
