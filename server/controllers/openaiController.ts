@@ -1,10 +1,18 @@
+import { insertAssistantConversationSchema, insertAssistantMessageSchema } from '@shared/schema';
+import * as archiver from 'archiver';
 import { Request, Response } from 'express';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { z } from 'zod';
 import openaiService from '../services/openaiService';
 import { storage } from '../storage';
-import { z } from 'zod';
-import { insertAssistantConversationSchema, insertAssistantMessageSchema } from '@shared/schema';
 
 export class OpenAIController {
+  createAssistantConversation: any;
+  getUserConversations: any;
+  getConversation: any;
+  getMessages: any;
   /**
    * Analyze repository structure and provide suggestions
    */
@@ -250,110 +258,47 @@ export class OpenAIController {
         return res.status(401).json({ message: 'Authentication required' });
       }
 
-      const conversationId = req.params.conversationId;
-      if (!conversationId) {
-        return res.status(400).json({ message: 'Conversation ID is required' });
+      const conversationId = parseInt(req.params.conversationId);
+      if (isNaN(conversationId)) {
+        return res.status(400).json({ message: 'Invalid conversation ID' });
       }
 
-      // Get conversation
+      // Get the conversation and verify ownership
       const conversation = await storage.getAssistantConversationById(conversationId);
-      if (!conversation) {
+      if (!conversation || conversation.userId !== userId) {
         return res.status(404).json({ message: 'Conversation not found' });
       }
 
-      // Check if user owns the conversation
-      if (conversation.userId !== userId) {
-        return res.status(403).json({ message: 'Unauthorized to access this conversation' });
-      }
-
-      // Get conversation history
-      const messages = await storage.getAssistantMessagesByConversationId(conversationId);
-      const conversationHistory = messages.map(m => ({
-        role: m.role,
-        content: m.content,
-      }));
-
-      try {
-        // Generate architectural plan
-        const { architecturalPlan, starterKit } = await openaiService.generateArchitecturalPlan(
-          conversationHistory
-        );
-
-        // Save plan to storage
-        const plan = await storage.createArchitecturalPlan({
-          conversationId,
-          content: architecturalPlan,
-          starterKit,
-          createdAt: new Date(),
-        });
-
-        // Mark conversation as completed
-        await storage.updateAssistantConversation(conversationId, { completed: true });
-
-        return res.status(200).json({ 
-          planId: plan.id, 
-          architecturalPlan, 
-          starterKit 
-        });
-      } catch (openAiError: any) {
-        console.error('OpenAI API error during plan generation:', openAiError.message);
-        
-        // Use a friendly response in development mode
-        const developmentPlan = {
-          architecturalPlan: "# Development Mode Plan\n\nThis is a placeholder architectural plan created during development mode without connecting to the OpenAI API.",
-          starterKit: {
-            folderStructure: [
-              {
-                name: 'src',
-                type: 'directory',
-                children: [
-                  { name: 'index.js', type: 'file', description: 'Main entry point' },
-                  { name: 'config.js', type: 'file', description: 'Configuration settings' },
-                  { 
-                    name: 'components', 
-                    type: 'directory',
-                    children: [
-                      { name: 'App.js', type: 'file', description: 'Main application component' }
-                    ]
-                  }
-                ]
-              },
-              { name: 'package.json', type: 'file', description: 'Dependencies and scripts' },
-              { name: 'README.md', type: 'file', description: 'Project documentation' }
-            ]
-          }
-        };
-        
-        // Save development plan
-        const plan = await storage.createArchitecturalPlan({
-          conversationId,
-          content: developmentPlan.architecturalPlan,
-          starterKit: developmentPlan.starterKit,
-          createdAt: new Date(),
-        });
-        
-        // Mark conversation as completed
-        await storage.updateAssistantConversation(conversationId, { completed: true });
-        
-        return res.status(200).json({
-          planId: plan.id,
-          ...developmentPlan,
-          devMode: true
-        });
-      }
-    } catch (error: any) {
-      console.error('Error generating plan:', error.message);
-      return res.status(500).json({ 
-        message: 'Failed to generate architectural plan', 
-        error: error.message 
+      // Generate the plan using OpenAI
+      const plan = await openaiService.generateArchitecturalPlan(conversation.messages);
+      
+      // Store the plan in the database
+      const savedPlan = await storage.createArchitecturalPlan({
+        userId,
+        conversationId,
+        content: plan.content,
+        format: 'markdown',
+        createdAt: new Date(),
+        metadata: {
+          projectType: plan.projectType,
+          technologies: plan.technologies
+        }
       });
+
+      return res.status(200).json({
+        planId: savedPlan.id,
+        content: savedPlan.content
+      });
+    } catch (error: any) {
+      console.error('Error generating plan:', error);
+      return res.status(500).json({ message: `Failed to generate plan: ${error.message}` });
     }
   }
 
   /**
-   * Export architectural plan as markdown file
+   * Export architectural plan as PDF
    */
-  async exportPlan(req: Request, res: Response) {
+  async exportArchiPlanPDF(req: Request, res: Response) {
     try {
       const userId = req.session?.userId;
       if (!userId) {
@@ -361,9 +306,7 @@ export class OpenAIController {
       }
 
       const conversationId = req.params.conversationId;
-      if (!conversationId) {
-        return res.status(400).json({ message: 'Conversation ID is required' });
-      }
+      console.log(`Exporting PDF for conversation ID: ${conversationId} (type: ${typeof conversationId})`);
 
       // Get conversation
       const conversation = await storage.getAssistantConversationById(conversationId);
@@ -377,22 +320,93 @@ export class OpenAIController {
       }
 
       // Get architectural plan
-      const plan = await storage.getArchitecturalPlanByConversationId(Number(conversationId));
+      const plan = await storage.getArchitecturalPlanByConversationId(conversationId);
+      console.log(`Retrieved plan for PDF export: ${!!plan}, plan ID: ${plan?.id}`);
       if (!plan) {
         return res.status(404).json({ message: 'No plan found for this conversation' });
       }
 
-      // Set response headers for file download
-      res.setHeader('Content-Type', 'text/markdown');
-      res.setHeader('Content-Disposition', 'attachment; filename="architectural-plan.md"');
-
+      // For now, we'll return markdown with PDF content type
+      // In the future, implement actual PDF conversion using a library like puppeteer or pdfkit
+      console.log('PDF export requested - returning markdown content for now');
+      
+      res.setHeader("Content-Type", "text/markdown");
+      res.setHeader("Content-Disposition", `attachment; filename="architectural-plan-${conversationId}.pdf"`);
+      
       // Send plan content
       return res.send(plan.content);
     } catch (error: any) {
-      console.error('Error exporting plan:', error.message);
+      console.error('Error exporting PDF:', error);
+      return res.status(500).json({ message: `Failed to export PDF: ${error.message}` });
+    }
+  }
+
+  /**
+   * Export architectural plan as markdown file
+   */
+  async exportPlan(req: Request, res: Response) {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+
+      const conversationId = parseInt(req.params.conversationId);
+      if (isNaN(conversationId)) {
+        return res.status(400).json({ message: 'Invalid conversation ID' });
+      }
+
+      const format = req.query.format as string || 'markdown';
+      console.log(`Exporting plan in format: ${format} for conversation: ${conversationId}`);
+
+      // Get conversation and verify ownership
+      const conversation = await storage.getAssistantConversationById(conversationId);
+      if (!conversation) {
+        console.log(`Conversation ${conversationId} not found`);
+        return res.status(404).json({ message: 'Conversation not found' });
+      }
+
+      if (conversation.userId !== userId) {
+        return res.status(403).json({ message: 'Unauthorized to access this conversation' });
+      }
+
+      // Get architectural plan
+      const plan = await storage.getArchitecturalPlanByConversationId(conversationId);
+      if (!plan) {
+        console.log(`No plan found for conversation ${conversationId}`);
+        return res.status(404).json({ message: 'No plan found for this conversation' });
+      }
+
+      // Handle different formats
+      switch (format) {
+        case 'json':
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Content-Disposition', 'attachment; filename="architectural-plan.json"');
+          return res.json({
+            plan: plan.content,
+            starterKit: plan.starterKit,
+            createdAt: plan.createdAt,
+            conversationId: plan.conversationId
+          });
+        
+        case 'pdf':
+          // Generate PDF from markdown
+          const pdf = await markdownToPdf(plan.content);
+          res.setHeader('Content-Type', 'application/pdf');
+          res.setHeader('Content-Disposition', `attachment; filename="architectural-plan-${conversationId}.pdf"`);
+          return res.send(pdf);
+        
+        case 'markdown':
+        default:
+          res.setHeader('Content-Type', 'text/markdown');
+          res.setHeader('Content-Disposition', 'attachment; filename="architectural-plan.md"');
+          return res.send(plan.content);
+      }
+    } catch (error: any) {
+      console.error('Error exporting plan:', error);
       return res.status(500).json({ 
-        message: 'Failed to export architectural plan', 
-        error: error.message 
+        message: `Failed to export plan: ${error.message}`,
+        error: error.stack 
       });
     }
   }
@@ -427,6 +441,91 @@ export class OpenAIController {
     } catch (error: any) {
       console.error(`Error updating conversation context: ${error.message}`);
       // Non-critical error, don't throw
+    }
+  }
+
+  async downloadStarterKit(req: Request, res: Response) {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+
+      const conversationId = req.params.conversationId;
+      console.log(`Downloading starter kit for conversation ID: ${conversationId} (type: ${typeof conversationId})`);
+
+      // Get conversation
+      const conversation = await storage.getAssistantConversationById(conversationId);
+      if (!conversation) {
+        return res.status(404).json({ message: 'Conversation not found' });
+      }
+
+      // Check if user owns the conversation
+      if (conversation.userId !== userId) {
+        return res.status(403).json({ message: 'Unauthorized to access this conversation' });
+      }
+
+      // Get architectural plan
+      const plan = await storage.getArchitecturalPlanByConversationId(conversationId);
+      console.log(`Retrieved plan for starter kit download: ${!!plan}, plan ID: ${plan?.id}`);
+      if (!plan) {
+        return res.status(404).json({ message: 'No plan found for this conversation' });
+      }
+
+      // Check if starter kit exists
+      if (!plan.starterKit) {
+        return res.status(404).json({ message: 'No starter kit available for this plan' });
+      }
+
+      // Create temporary directory for files
+      const tempDir = path.join(os.tmpdir(), `starter-kit-${Date.now()}`);
+      fs.mkdirSync(tempDir, { recursive: true });
+
+      try {
+        // Iterate through the files in the starter kit
+        for (const file of plan.starterKit) {
+          const filePath = path.join(tempDir, file.path);
+          
+          // Create directories if they don't exist
+          const dirPath = path.dirname(filePath);
+          fs.mkdirSync(dirPath, { recursive: true });
+          
+          // Write the file contents
+          fs.writeFileSync(filePath, file.content);
+        }
+
+        // Create zip archive
+        const zipPath = path.join(os.tmpdir(), `starter-kit-${Date.now()}.zip`);
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+
+        // Pipe archive to output file
+        archive.pipe(output);
+        
+        // Add all files from the temp directory to the archive
+        archive.directory(tempDir, false);
+        
+        // Finalize the archive
+        await archive.finalize();
+
+        // Set appropriate headers
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', 'attachment; filename=starter-kit.zip');
+        
+        // Send the file
+        return res.sendFile(zipPath, () => {
+          // Clean up temporary files after sending
+          fs.unlinkSync(zipPath);
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        });
+      } catch (err: any) {
+        // Clean up if there's an error
+        fs.rmSync(tempDir, { recursive: true, force: true });
+        throw err;
+      }
+    } catch (error: any) {
+      console.error('Error downloading starter kit:', error);
+      return res.status(500).json({ message: `Failed to download starter kit: ${error.message}` });
     }
   }
 }

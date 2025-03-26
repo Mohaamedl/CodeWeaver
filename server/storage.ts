@@ -32,7 +32,7 @@ export interface IStorage {
 
   // Architectural plan operations
   createArchitecturalPlan(plan: InsertArchitecturalPlan): Promise<ArchitecturalPlan>;
-  getArchitecturalPlanByConversationId(conversationId: number): Promise<ArchitecturalPlan | undefined>;
+  getArchitecturalPlanByConversationId(conversationId: number | string): Promise<ArchitecturalPlan | undefined>;
   
   // Database status operations
   isConnectedToMongo(): boolean;
@@ -248,9 +248,10 @@ export class MemStorage implements IStorage {
     return architecturalPlan;
   }
 
-  async getArchitecturalPlanByConversationId(conversationId: number): Promise<ArchitecturalPlan | undefined> {
+  async getArchitecturalPlanByConversationId(conversationId: number | string): Promise<ArchitecturalPlan | undefined> {
+    const numericId = typeof conversationId === 'string' ? parseInt(conversationId) : conversationId;
     return Array.from(this.architecturalPlans.values()).find(
-      (plan) => plan.conversationId === conversationId,
+      (plan) => plan.conversationId === numericId,
     );
   }
   

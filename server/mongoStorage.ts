@@ -15,6 +15,7 @@ import AssistantMessageModel from './models/AssistantMessage';
 import ArchitecturalPlanModel from './models/ArchitecturalPlan';
 import database from './database';
 import { log } from './vite';
+import mongoose from 'mongoose';
 
 export class MongoStorage implements IStorage {
 
@@ -212,22 +213,138 @@ export class MongoStorage implements IStorage {
   // Architectural plan operations
   async createArchitecturalPlan(plan: InsertArchitecturalPlan): Promise<ArchitecturalPlan> {
     try {
-      const newPlan = await ArchitecturalPlanModel.create(plan);
+      console.log(`Creating architectural plan for conversationId: ${plan.conversationId} (type: ${typeof plan.conversationId})`);
+      
+      // Store both the original and converted ID to make retrieval easier
+      let planToSave: any = { 
+        ...plan,
+        // Store the original string form of the ID for easier retrieval
+        originalConversationId: plan.conversationId ? plan.conversationId.toString() : ''
+      };
+      
+      // Try to convert to ObjectId if valid
+      if (plan.conversationId && mongoose.Types.ObjectId.isValid(plan.conversationId.toString())) {
+        console.log(`Converting conversationId ${plan.conversationId} to ObjectId`);
+        planToSave.conversationId = new mongoose.Types.ObjectId(plan.conversationId.toString());
+      } else {
+        console.log(`Using conversationId ${plan.conversationId} as-is (not a valid ObjectId)`);
+      }
+      
+      // Just for debugging - check if we can find the conversation this relates to
+      try {
+        const AssistantConversationModel = mongoose.model('AssistantConversation');
+        
+        // Log all conversations for debugging
+        const allConversations = await AssistantConversationModel.find({});
+        console.log(`Found ${allConversations.length} conversations in the database`);
+        allConversations.forEach(conv => {
+          console.log(`Conversation ID: ${conv._id}, created at: ${conv.startedAt}`);
+        });
+        
+        // Try to find the relevant conversation by _id
+        if (plan.conversationId) {
+          const conversation = await AssistantConversationModel.findOne({
+            _id: mongoose.Types.ObjectId.isValid(plan.conversationId.toString()) 
+              ? new mongoose.Types.ObjectId(plan.conversationId.toString()) 
+              : plan.conversationId
+          });
+          
+          if (conversation) {
+            console.log(`Found conversation with ID ${conversation._id} - using this as conversationId reference`);
+            planToSave.conversationId = conversation._id;
+          } else {
+            console.log(`No conversation found with ID ${plan.conversationId}`);
+          }
+        } else {
+          console.log('No conversationId provided to link with');
+        }
+      } catch (idError: any) {
+        console.error(`Error looking up conversation: ${idError.message}`);
+      }
+      
+      console.log(`Saving plan with final conversationId: ${planToSave.conversationId}`);
+      console.log(`Full plan data being saved:`, JSON.stringify(planToSave, null, 2));
+      
+      const newPlan = await ArchitecturalPlanModel.create(planToSave);
+      console.log(`Successfully created plan with ID: ${newPlan._id} for conversation: ${newPlan.conversationId}`);
+      
       return this.convertToArchitecturalPlan(newPlan);
     } catch (error: any) {
-      log(`Error creating architectural plan: ${error.message}`, 'mongo-storage');
+      console.error(`Error creating architectural plan: ${error.message}`, error);
       throw new Error(`Failed to create architectural plan: ${error.message}`);
     }
   }
 
-  async getArchitecturalPlanByConversationId(conversationId: number): Promise<ArchitecturalPlan | undefined> {
+  async getArchitecturalPlanByConversationId(conversationId: number | string): Promise<ArchitecturalPlan | undefined> {
     try {
-      const plan = await ArchitecturalPlanModel.findOne({ conversationId });
-      if (!plan) return undefined;
+      console.log(`Looking for architectural plan with conversationId: ${conversationId} (type: ${typeof conversationId})`);
       
-      return this.convertToArchitecturalPlan(plan);
+      // First try a direct lookup by ID just to verify if something's working
+      const allPlans = await ArchitecturalPlanModel.find({});
+      console.log(`Found ${allPlans.length} total plans in the database`);
+      
+      // Log all plans for debugging
+      if (allPlans.length > 0) {
+        allPlans.forEach(plan => {
+          console.log(`Plan ID: ${plan._id}, for conversation: ${plan.conversationId}`);
+        });
+      } else {
+        console.log('No plans found in the database at all.');
+        return undefined;
+      }
+      
+      // Try different approaches to find the plan
+      
+      // 1. Try direct match on conversationId
+      let plan = await ArchitecturalPlanModel.findOne({ conversationId: conversationId });
+      if (plan) {
+        console.log(`Found plan with direct match on conversationId: ${conversationId}`);
+        return this.convertToArchitecturalPlan(plan);
+      }
+      
+      // 2. Try with ObjectId conversion if it's a valid one
+      if (typeof conversationId === 'string' && mongoose.Types.ObjectId.isValid(conversationId)) {
+        plan = await ArchitecturalPlanModel.findOne({ 
+          conversationId: new mongoose.Types.ObjectId(conversationId) 
+        });
+        if (plan) {
+          console.log(`Found plan with ObjectId conversion of: ${conversationId}`);
+          return this.convertToArchitecturalPlan(plan);
+        }
+      }
+      
+      // 3. Try string comparison (this is more expensive but may catch edge cases)
+      console.log(`Trying string comparison for conversationId: ${conversationId}`);
+      const matchingPlan = allPlans.find(p => {
+        if (!p.conversationId) return false;
+        const planIdStr = p.conversationId.toString();
+        const searchIdStr = conversationId.toString();
+        const matches = planIdStr === searchIdStr;
+        console.log(`Comparing ${planIdStr} with ${searchIdStr}: ${matches ? 'MATCH' : 'no match'}`);
+        return matches;
+      });
+      
+      if (matchingPlan) {
+        console.log(`Found plan with string comparison: ${matchingPlan._id}`);
+        return this.convertToArchitecturalPlan(matchingPlan);
+      }
+
+      // 4. Desperate approach: Try to find a conv ID that matches the MongoDB _id field
+      plan = await ArchitecturalPlanModel.findOne({ 
+        _id: mongoose.Types.ObjectId.isValid(conversationId.toString()) 
+          ? new mongoose.Types.ObjectId(conversationId.toString()) 
+          : null 
+      });
+      
+      if (plan) {
+        console.log(`Found plan with _id matching conversationId: ${conversationId}`);
+        return this.convertToArchitecturalPlan(plan);
+      }
+      
+      console.log(`No plan found for conversationId: ${conversationId} after trying multiple methods`);
+      return undefined;
     } catch (error: any) {
-      log(`Error fetching architectural plan: ${error.message}`, 'mongo-storage');
+      console.error(`Error fetching architectural plan: ${error.message}`, error);
       return undefined;
     }
   }

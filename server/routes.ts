@@ -50,6 +50,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/assistant/conversations/:conversationId/messages", checkAuth, openaiController.sendMessage.bind(openaiController));
   app.post("/api/assistant/conversations/:conversationId/generate-plan", checkAuth, openaiController.generatePlan.bind(openaiController));
   app.get("/api/assistant/conversations/:conversationId/export", checkAuth, openaiController.exportPlan.bind(openaiController));
+  app.get("/api/assistant/conversations/:conversationId/export-pdf", checkAuth, openaiController.exportArchiPlanPDF.bind(openaiController));
 
   // Authentication status route
   app.get("/api/auth/status", (req, res) => {
