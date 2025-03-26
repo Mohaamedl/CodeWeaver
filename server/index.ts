@@ -118,7 +118,7 @@ app.use((req, res, next) => {
   // It is the only port that is not firewalled.
   // NOTE: GitHub OAuth is configured to use http://localhost:3000 for the callback URL
   // Make sure your GitHub OAuth app settings match APP_BASE_URL in .env
-  const port = 5000;
+  const port = process.env.PORT;
   server.listen({
     port,
     host: "0.0.0.0",
