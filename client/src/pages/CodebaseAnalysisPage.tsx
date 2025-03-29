@@ -49,16 +49,19 @@ const CodebaseAnalysisPage = () => {
 
       console.log('Starting review with structure:', repositoryStructure);
 
+      const payload = {
+        path: `${selectedRepo.owner.login}/${selectedRepo.name}`,
+        structure: repositoryStructure
+      };
+      console.log('Sending payload:', payload);
+
       const response = await fetch('http://localhost:8000/review', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        body: JSON.stringify({
-          path: `${selectedRepo.owner.login}/${selectedRepo.name}`,
-          structure: repositoryStructure
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -75,15 +78,23 @@ const CodebaseAnalysisPage = () => {
 
       const data = await response.json();
       console.log('Review response:', data);
+      
+      if (!data.suggestions) {
+        console.warn('No suggestions array in response:', data);
+        data.suggestions = [];
+      }
+      
       return data as ReviewSession;
     },
     onSuccess: (data) => {
       if (!data.suggestions || data.suggestions.length === 0) {
+        console.log('No suggestions found');
         toast({
           title: 'Review completed',
           description: 'No suggestions found for this repository',
         });
       } else {
+        console.log(`Found ${data.suggestions.length} suggestions:`, data.suggestions);
         setCurrentSession(data);
         toast({
           title: 'Review completed',

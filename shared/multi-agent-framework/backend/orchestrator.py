@@ -2,6 +2,7 @@ import difflib
 import logging
 import os
 import re
+from typing import Any, Dict, List, Tuple
 
 from backend.agents.coder import CoderAgent
 from backend.agents.dependency import DependencyAgent
@@ -13,67 +14,70 @@ from backend.chat_memory import ChatMemory
 from backend.db.database import SessionLocal
 from backend.db.models import ReviewSession, Suggestion
 
+logger = logging.getLogger(__name__)
 
 class AgentOrchestrator:
     def __init__(self):
-        # Initialize agents
-        self.coder_agent = CoderAgent()
+        self.chat_memory = ChatMemory()
+        # Initialize all agents
         self.agents = [
             LintingAgent(),
             RefactoringAgent(),
             DependencyAgent(),
             LLMReviewAgent()
         ]
-        self.meta_agent = MetaReviewAgent()
-        self.chat_memory = ChatMemory()
+        logger.info(f"Initialized {len(self.agents)} agents")
 
     def generate_code(self, prompt: str) -> str:
         """Generate code from a prompt using the CoderAgent."""
         # We can optionally use user preferences (language, style) from chat_memory
-        return self.coder_agent.run(prompt, self.chat_memory)
+        return CoderAgent().run(prompt, self.chat_memory)
 
-    def run_review(self, repo_path: str):
+    def run_review(self, repo_path: str, structure: Dict[str, Any] = None) -> Tuple[ReviewSession, List[dict]]:
         """Run all agents on the repository."""
-        logging.info(f"Starting review for repository: {repo_path}")
+        logger.info(f"Starting review for repository: {repo_path}")
         
         try:
-            # Create a new review session
             db = SessionLocal()
+            # Create a new review session
             session = ReviewSession(repo_path=repo_path)
             db.add(session)
             db.commit()
             
-            suggestions = []
+            all_suggestions = []
             
             # Run each agent
             for agent in self.agents:
-                logging.info(f"Running agent: {agent.__class__.__name__}")
+                logger.info(f"Running agent: {agent.__class__.__name__}")
                 try:
-                    agent_suggestions = agent.run(repo_path, self.chat_memory)
+                    # Pass both repo path and structure to agents
+                    agent_suggestions = agent.run(repo_path, self.chat_memory, structure)
+                    logger.info(f"Agent {agent.__class__.__name__} found {len(agent_suggestions)} suggestions")
+                    
                     for sugg in agent_suggestions:
                         sugg['agent'] = agent.__class__.__name__
-                        suggestions.append(sugg)
+                        all_suggestions.append(sugg)
+                        
+                        # Store in database
+                        db_sugg = Suggestion(
+                            session_id=session.id,
+                            agent=sugg['agent'],
+                            message=sugg['message'],
+                            patch=sugg.get('patch'),
+                            file_path=sugg.get('file_path'),
+                            status='pending'
+                        )
+                        db.add(db_sugg)
+                
                 except Exception as e:
-                    logging.error(f"Error in agent {agent.__class__.__name__}: {e}")
-            
-            # Store suggestions in database
-            for sugg in suggestions:
-                db_sugg = Suggestion(
-                    session_id=session.id,
-                    agent=sugg['agent'],
-                    message=sugg['message'],
-                    patch=sugg.get('patch'),
-                    file_path=sugg.get('file_path'),
-                    status='pending'
-                )
-                db.add(db_sugg)
+                    logger.error(f"Error in agent {agent.__class__.__name__}: {str(e)}", exc_info=True)
             
             db.commit()
-            logging.info(f"Review completed. Found {len(suggestions)} suggestions")
-            return session, suggestions
+            logger.info(f"Review completed. Found {len(all_suggestions)} suggestions")
+            return session, all_suggestions
             
         except Exception as e:
-            logging.error(f"Error during review: {e}")
+            logger.error(f"Error during review: {str(e)}", exc_info=True)
             raise
         finally:
             db.close()

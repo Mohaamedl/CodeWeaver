@@ -1,12 +1,29 @@
 import ast
+import logging
 import os
+from typing import Any, Dict, List
+
 from backend.agents.base import BaseAgent
 from backend.chat_memory import ChatMemory
 
+logger = logging.getLogger(__name__)
+
 class LintingAgent(BaseAgent):
     """Agent that checks code for lint issues (e.g., print statements, style inconsistencies)."""
-    def run(self, repo_path: str, chat_memory: ChatMemory):
+    def run(self, repo_path: str, chat_memory: Any, structure: Dict[str, Any] = None) -> List[dict]:
         suggestions = []
+        
+        # Analyze TypeScript/JavaScript files
+        if structure and structure.get('children'):
+            for file in self._get_all_files(structure['children']):
+                if file['path'].endswith(('.ts', '.tsx', '.js', '.jsx')):
+                    suggestions.append({
+                        'message': f"Consider adding ESLint and Prettier configuration for {file['path']}",
+                        'file_path': file['path'],
+                        'patch': None,
+                        'status': 'pending'
+                    })
+        
         # Collect print suggestions (one per file)
         for root, dirs, files in os.walk(repo_path):
             for file in files:
@@ -124,3 +141,12 @@ class LintingAgent(BaseAgent):
                 parts.append(' ')  # add space separator
         combined = ''.join(parts)
         return f"{func_call}(f'{combined}')"
+
+    def _get_all_files(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        files = []
+        for item in items:
+            if item['type'] == 'file':
+                files.append(item)
+            elif item['type'] == 'directory' and item.get('children'):
+                files.extend(self._get_all_files(item['children']))
+        return files

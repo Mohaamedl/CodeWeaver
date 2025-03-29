@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from backend.db.database import SessionLocal
 from backend.db.models import ReviewSession, Suggestion
@@ -14,6 +14,7 @@ load_dotenv()
 import logging
 
 logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Pydantic v2 models
 class GenerateRequest(BaseModelV2):
@@ -24,7 +25,8 @@ class GenerateResponse(BaseModelV2):
 
 class ReviewRequest(BaseModelV2):
     path: str
-    structure: dict  # Add this field to receive repository structure
+    structure: Dict[str, Any]  # Repository structure
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class ReviewSuggestion(BaseModelV2):
     id: int
@@ -67,35 +69,39 @@ def generate_code(req: GenerateRequest):
 
 @app.post("/review", response_model=ReviewResponse)
 async def review_code(req: ReviewRequest) -> ReviewResponse:
-    """Run code review on the repository at the given path."""
-    logging.debug(f"Received review request for path: {req.path}")
-    logging.debug(f"Repository structure: {req.structure}")
+    """Run code review on the repository."""
+    logger.debug(f"Received review request for path: {req.path}")
+    logger.debug(f"Repository structure: {req.structure}")
     
     try:
         orchestrator = AgentOrchestrator()
-        session, suggestions = orchestrator.run_review(req.path)
+        # Pass both path and structure
+        session, suggestions = orchestrator.run_review(req.path, req.structure)
         
-        formatted_suggestions = [
-            ReviewSuggestion(
+        logger.debug(f"Generated {len(suggestions)} suggestions")
+        logger.debug(f"Suggestions: {suggestions}")
+        
+        formatted_suggestions = []
+        for i, sugg in enumerate(suggestions):
+            formatted_sugg = ReviewSuggestion(
                 id=i,
-                agent=s['agent'],
-                message=s['message'],
-                patch=s.get('patch'),
-                file_path=s.get('file_path'),
+                agent=sugg['agent'],
+                message=sugg['message'],
+                patch=sugg.get('patch'),
+                file_path=sugg.get('file_path'),
                 status='pending'
-            ) for i, s in enumerate(suggestions)
-        ]
+            )
+            formatted_suggestions.append(formatted_sugg)
         
-        logging.debug(f"Review completed. Session ID: {session.id}")
-        logging.debug(f"Generated suggestions: {formatted_suggestions}")
-        
-        return ReviewResponse(
+        response = ReviewResponse(
             session_id=session.id,
             suggestions=formatted_suggestions
         )
+        logger.debug(f"Sending response: {response}")
+        return response
+        
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error during review: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/apply-patch", response_model=ApplyPatchResponse)
