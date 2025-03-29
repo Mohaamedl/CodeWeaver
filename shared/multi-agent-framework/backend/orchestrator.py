@@ -1,72 +1,80 @@
+import difflib
+import logging
 import os
 import re
-import difflib
+
+from backend.agents.coder import CoderAgent
+from backend.agents.dependency import DependencyAgent
+from backend.agents.linting import LintingAgent
+from backend.agents.llm_review import LLMReviewAgent
+from backend.agents.meta_review import MetaReviewAgent
+from backend.agents.refactoring import RefactoringAgent
+from backend.chat_memory import ChatMemory
 from backend.db.database import SessionLocal
 from backend.db.models import ReviewSession, Suggestion
-from backend.agents.coder import CoderAgent
-from backend.agents.llm_review import LLMReviewAgent
-from backend.agents.refactoring import RefactoringAgent
-from backend.agents.linting import LintingAgent
-from backend.agents.dependency import DependencyAgent
-from backend.agents.meta_review import MetaReviewAgent
-from backend.chat_memory import ChatMemory
+
 
 class AgentOrchestrator:
     def __init__(self):
         # Initialize agents
         self.coder_agent = CoderAgent()
-        self.review_agents = [
+        self.agents = [
             LintingAgent(),
             RefactoringAgent(),
             DependencyAgent(),
             LLMReviewAgent()
         ]
         self.meta_agent = MetaReviewAgent()
+        self.chat_memory = ChatMemory()
 
     def generate_code(self, prompt: str) -> str:
         """Generate code from a prompt using the CoderAgent."""
         # We can optionally use user preferences (language, style) from chat_memory
-        chat_memory = ChatMemory()
-        return self.coder_agent.run(prompt, chat_memory)
+        return self.coder_agent.run(prompt, self.chat_memory)
 
     def run_review(self, repo_path: str):
-        """Run a multi-agent review on the given repository path."""
-        db = SessionLocal()
+        """Run all agents on the repository."""
+        logging.info(f"Starting review for repository: {repo_path}")
+        
         try:
-            session_obj = ReviewSession(repo_path=repo_path)
-            db.add(session_obj)
-            # Instantiate shared chat memory and infer preferences
-            chat_memory = ChatMemory()
-            chat_memory.infer_preferences(repo_path)
-            suggestions_all = []
-            # Run each agent and collect suggestions
-            for agent in self.review_agents:
-                try:
-                    agent_suggestions = agent.run(repo_path, chat_memory)
-                except Exception as e:
-                    # If an agent fails, skip it
-                    print(f"Agent {agent.__class__.__name__} failed: {e}")
-                    agent_suggestions = []
-                for sugg in agent_suggestions:
-                    # sugg is expected to be a dict with keys 'message', 'patch', 'file_path'
-                    suggestion_model = Suggestion(
-                        session=session_obj,
-                        agent=agent.__class__.__name__,
-                        message=sugg.get('message', ''),
-                        patch=sugg.get('patch'),
-                        file_path=sugg.get('file_path'),
-                        status='pending'
-                    )
-                    db.add(suggestion_model)
-                    suggestions_all.append(suggestion_model)
-            # Flush to assign IDs to session and suggestions
-            db.flush()
-            # Run meta review agent to generate summary
-            summary_text = self.meta_agent.run(suggestions_all, chat_memory)
-            session_obj.summary = summary_text
-            # Commit all changes
+            # Create a new review session
+            db = SessionLocal()
+            session = ReviewSession(repo_path=repo_path)
+            db.add(session)
             db.commit()
-            return session_obj, suggestions_all
+            
+            suggestions = []
+            
+            # Run each agent
+            for agent in self.agents:
+                logging.info(f"Running agent: {agent.__class__.__name__}")
+                try:
+                    agent_suggestions = agent.run(repo_path, self.chat_memory)
+                    for sugg in agent_suggestions:
+                        sugg['agent'] = agent.__class__.__name__
+                        suggestions.append(sugg)
+                except Exception as e:
+                    logging.error(f"Error in agent {agent.__class__.__name__}: {e}")
+            
+            # Store suggestions in database
+            for sugg in suggestions:
+                db_sugg = Suggestion(
+                    session_id=session.id,
+                    agent=sugg['agent'],
+                    message=sugg['message'],
+                    patch=sugg.get('patch'),
+                    file_path=sugg.get('file_path'),
+                    status='pending'
+                )
+                db.add(db_sugg)
+            
+            db.commit()
+            logging.info(f"Review completed. Found {len(suggestions)} suggestions")
+            return session, suggestions
+            
+        except Exception as e:
+            logging.error(f"Error during review: {e}")
+            raise
         finally:
             db.close()
 
@@ -75,7 +83,6 @@ def apply_patch_to_file(patch: str, repo_path: str) -> bool:
     Apply a unified diff patch string to the file in the given repository path.
     Returns True if successful, or False if something fails (file not found, etc.).
     """
-    import logging
     logging.basicConfig(level=logging.DEBUG)
 
     logging.debug("=== apply_patch_to_file called ===")

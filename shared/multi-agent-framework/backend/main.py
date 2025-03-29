@@ -1,15 +1,18 @@
-from fastapi import FastAPI, HTTPException, Query
 from typing import List, Optional
-from pydantic import BaseModel as BaseModelV2
-from pydantic import ConfigDict
-from backend.orchestrator import AgentOrchestrator, apply_patch_to_file
+
 from backend.db.database import SessionLocal
 from backend.db.models import ReviewSession, Suggestion
-
+from backend.orchestrator import AgentOrchestrator, apply_patch_to_file
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel as BaseModelV2
+from pydantic import ConfigDict
+
 load_dotenv()
 
 import logging
+
 logging.basicConfig(level=logging.DEBUG)
 
 # Pydantic v2 models
@@ -21,20 +24,19 @@ class GenerateResponse(BaseModelV2):
 
 class ReviewRequest(BaseModelV2):
     path: str
+    structure: dict  # Add this field to receive repository structure
 
-class SuggestionOut(BaseModelV2):
+class ReviewSuggestion(BaseModelV2):
     id: int
     agent: str
     message: str
-    patch: Optional[str] = None
-    file_path: Optional[str] = None
-    status: str
-
-    model_config = ConfigDict(from_attributes=True)  # replaces Config.orm_mode
+    patch: Optional[str]
+    file_path: Optional[str]
+    status: str = 'pending'
 
 class ReviewResponse(BaseModelV2):
     session_id: int
-    suggestions: List[SuggestionOut]
+    suggestions: List[ReviewSuggestion]
 
 class ApplyPatchRequest(BaseModelV2):
     suggestion_id: int
@@ -48,6 +50,14 @@ class SummaryResponse(BaseModelV2):
 
 app = FastAPI(title="Code Review Assistant API")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:5000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.post("/generate", response_model=GenerateResponse)
 def generate_code(req: GenerateRequest):
     """Generate code from a natural language prompt."""
@@ -56,11 +66,37 @@ def generate_code(req: GenerateRequest):
     return GenerateResponse(code=code)
 
 @app.post("/review", response_model=ReviewResponse)
-def review_code(req: ReviewRequest):
+async def review_code(req: ReviewRequest) -> ReviewResponse:
     """Run code review on the repository at the given path."""
-    orchestrator = AgentOrchestrator()
-    session_obj, suggestions = orchestrator.run_review(req.path)
-    return ReviewResponse(session_id=session_obj.id, suggestions=suggestions)
+    logging.debug(f"Received review request for path: {req.path}")
+    logging.debug(f"Repository structure: {req.structure}")
+    
+    try:
+        orchestrator = AgentOrchestrator()
+        session, suggestions = orchestrator.run_review(req.path)
+        
+        formatted_suggestions = [
+            ReviewSuggestion(
+                id=i,
+                agent=s['agent'],
+                message=s['message'],
+                patch=s.get('patch'),
+                file_path=s.get('file_path'),
+                status='pending'
+            ) for i, s in enumerate(suggestions)
+        ]
+        
+        logging.debug(f"Review completed. Session ID: {session.id}")
+        logging.debug(f"Generated suggestions: {formatted_suggestions}")
+        
+        return ReviewResponse(
+            session_id=session.id,
+            suggestions=formatted_suggestions
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/apply-patch", response_model=ApplyPatchResponse)
 def apply_patch(req: ApplyPatchRequest):
