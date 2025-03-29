@@ -73,6 +73,7 @@ def generate_code(req: GenerateRequest):
 async def review_code(req: ReviewRequest, authorization: str = Header(None)) -> ReviewResponse:
     """Run code review on the repository."""
     logger.debug(f"Received review request for path: {req.path}")
+    logger.debug(f"Structure has {len(req.structure.get('children', []))} items")
     
     try:
         # Extract token from Authorization header
@@ -81,42 +82,36 @@ async def review_code(req: ReviewRequest, authorization: str = Header(None)) -> 
             
         github_token = authorization.split(' ')[1]
         
-        # Verify path exists
+        # Verify path exists or clone repository
         if not os.path.exists(req.path):
-            raise HTTPException(status_code=404, detail=f"Repository path does not exist: {req.path}")
+            logger.info(f"Repository path does not exist: {req.path}, attempting to clone...")
+            # Initialize GitHub API with token
+            from backend.services.github import GitHubAPI
+            github = GitHubAPI(github_token)
+            repo_path = await github.clone_repository(req.owner, req.repo)
+            logger.info(f"Repository cloned to: {repo_path}")
+            req.path = repo_path
             
         orchestrator = AgentOrchestrator()
-        session, suggestions = orchestrator.run_review(req.path, req.structure)
-        
-        # Query suggestions from database to get their assigned IDs
-        db = SessionLocal()
-        try:
-            db_suggestions = (
-                db.query(Suggestion)
-                .filter(Suggestion.session_id == session.id)
-                .order_by(Suggestion.id)
-                .all()
-            )
-            
-            formatted_suggestions = [
-                ReviewSuggestion(
-                    id=sugg.id,  # Use DB-assigned ID
-                    agent=sugg.agent,
-                    message=sugg.message,
-                    patch=sugg.patch,
-                    file_path=sugg.file_path,
-                    status=sugg.status
-                )
-                for sugg in db_suggestions
-            ]
-        finally:
-            db.close()
-            
-        response = ReviewResponse(
-            session_id=session.id,
-            suggestions=formatted_suggestions
+        session, suggestions = orchestrator.run_review(
+            req.path, 
+            req.structure,
+            github_info={
+                'owner': req.owner,
+                'repo': req.repo,
+                'token': github_token
+            }
         )
-        return response
+        
+        # Log agent results
+        logger.info("Review completed:")
+        for agent, count in orchestrator.get_agent_stats().items():
+            logger.info(f"- {agent}: {count} suggestions")
+            
+        return ReviewResponse(
+            session_id=session.id,
+            suggestions=suggestions
+        )
         
     except Exception as e:
         logger.error(f"Error during review: {str(e)}", exc_info=True)

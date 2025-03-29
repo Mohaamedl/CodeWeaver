@@ -24,15 +24,27 @@ class LintingAgent(BaseAgent):
         SKIP_DIRS = {'.venv', 'venv', '.env', 'node_modules', '__pycache__', 
                     'site-packages', 'dist-packages', '.git'}
         
-        # First handle TypeScript/JavaScript files from structure
+        # Check if ESLint/Prettier config already exists
+        has_eslint_config = False
+        has_prettier_config = False
+        
         if structure and structure.get('children'):
             for file in self._get_all_files(structure['children']):
-                if file['path'].endswith(('.ts', '.tsx', '.js', '.jsx')):
-                    suggestions.append({
-                        'message': f"Consider adding ESLint and Prettier configuration for {file['path']}",
-                        'file_path': file['path'],
-                        'patch': None
-                    })
+                if file['path'].endswith(('.eslintrc', '.prettierrc')):
+                    if '.eslintrc' in file['path']:
+                        has_eslint_config = True
+                    if '.prettierrc' in file['path']:
+                        has_prettier_config = True
+                if has_eslint_config and has_prettier_config:
+                    break
+        
+        # Only suggest ESLint/Prettier if neither config exists
+        if not has_eslint_config and not has_prettier_config:
+            suggestions.append({
+                'message': "Consider adding ESLint and Prettier configuration for consistent code style",
+                'file_path': None,
+                'patch': None
+            })
         
         # Then analyze Python files
         repo_path = os.path.realpath(repo_path)

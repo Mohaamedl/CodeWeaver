@@ -276,6 +276,100 @@ export class GitHubController {
       currentParent = pathMap[currentPath];
     }
   }
+
+  /**
+   * List available branches
+   */
+  async listBranches(req: Request, res: Response) {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+
+      const accessToken = req.session?.githubAccessToken;
+      if (!accessToken) {
+        return res.status(401).json({ message: 'GitHub authentication required' });
+      }
+
+      const { owner, repo } = req.query;
+      if (!owner || !repo) {
+        return res.status(400).json({ message: 'Owner and repository name are required' });
+      }
+
+      const branches = await githubService.getBranches(accessToken, owner as string, repo as string);
+      return res.status(200).json(branches);
+    } catch (error: any) {
+      console.error('Error listing branches:', error.message);
+      return res.status(500).json({ message: 'Failed to fetch branches' });
+    }
+  }
+
+  /**
+   * Create a new branch
+   */
+  async createBranch(req: Request, res: Response) {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+
+      const accessToken = req.session?.githubAccessToken;
+      if (!accessToken) {
+        return res.status(401).json({ message: 'GitHub authentication required' });
+      }
+
+      const { owner, repo, baseBranch, suggestionId } = req.body;
+      if (!owner || !repo || !baseBranch || !suggestionId) {
+        return res.status(400).json({ message: 'Missing required parameters' });
+      }
+
+      const branchName = `fix/${suggestionId}`;
+      const branch = await githubService.createBranch(accessToken, owner, repo, baseBranch, branchName);
+      return res.status(200).json(branch);
+    } catch (error: any) {
+      console.error('Error creating branch:', error.message);
+      return res.status(500).json({ message: 'Failed to create branch' });
+    }
+  }
+
+  /**
+   * Create a pull request
+   */
+  async createPullRequest(req: Request, res: Response) {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+
+      const accessToken = req.session?.githubAccessToken;
+      if (!accessToken) {
+        return res.status(401).json({ message: 'GitHub authentication required' });
+      }
+
+      const { owner, repo, baseBranch, suggestionId } = req.body;
+      if (!owner || !repo || !baseBranch || !suggestionId) {
+        return res.status(400).json({ message: 'Missing required parameters' });
+      }
+
+      const branchName = `fix/${suggestionId}`;
+      const pr = await githubService.createPullRequest(
+        accessToken,
+        owner,
+        repo,
+        baseBranch,
+        branchName,
+        `Fix: ${suggestionId}`,
+        `This PR implements the suggested changes from review suggestion ${suggestionId}`
+      );
+      return res.status(200).json(pr);
+    } catch (error: any) {
+      console.error('Error creating pull request:', error.message);
+      return res.status(500).json({ message: 'Failed to create pull request' });
+    }
+  }
 }
 
 export default new GitHubController();

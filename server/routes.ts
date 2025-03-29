@@ -104,6 +104,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
+  // GitHub routes
+  app.get("/api/github/branches", githubController.listBranches);
+  app.post("/api/github/create-branch", githubController.createBranch);
+  app.post("/api/github/create-pr", githubController.createPullRequest);
+
   const httpServer = createServer(app);
 
   return httpServer;

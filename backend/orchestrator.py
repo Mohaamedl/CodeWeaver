@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 class AgentOrchestrator:
     def __init__(self):
         self.chat_memory = ChatMemory()
+        self.agent_stats = {}  # Track suggestions per agent
         # Initialize all agents
         self.agents = [
             LintingAgent(),
@@ -33,16 +34,37 @@ class AgentOrchestrator:
         # We can optionally use user preferences (language, style) from chat_memory
         return CoderAgent().run(prompt, self.chat_memory)
 
-    def run_review(self, repo_path: str, structure: Dict[str, Any] | None = None) -> Tuple[ReviewSession, List[dict]]:
+    def get_agent_stats(self):
+        return self.agent_stats
+
+    def run_review(self, repo_path: str, structure: Dict[str, Any] | None = None, github_info: Dict[str, Any] | None = None) -> Tuple[ReviewSession, List[dict]]:
         """Run all agents on the repository."""
         logger.info(f"Starting review for repository: {repo_path}")
-        
+        logger.info(f"GitHub info available: {bool(github_info)}")
+        self.agent_stats = {}  # Reset stats
+
         try:
-            # Verify repository path exists
+            if github_info and github_info.get('token'):
+                logger.info("Using GitHub API for direct access")
+                from backend.services.github import GitHubAPI
+                github_api = GitHubAPI(github_info['token'])
+            else:
+                logger.warning("No GitHub token provided, will need to use local repository")
+
             if not os.path.exists(repo_path):
-                logger.error(f"Repository path does not exist: {repo_path}")
-                raise ValueError(f"Repository path does not exist: {repo_path}")
-                
+                if github_info and github_info.get('token'):
+                    logger.info(f"Attempting to use GitHub API for {github_info['owner']}/{github_info['repo']}")
+                    try:
+                        # Get repository info from GitHub API
+                        repo_info = github_api.get_repo_info(github_info['owner'], github_info['repo'])
+                        logger.info(f"Successfully got repo info from GitHub API: {repo_info['full_name']}")
+                    except Exception as e:
+                        logger.error(f"Failed to access repository via GitHub API: {e}")
+                        raise ValueError(f"Cannot access repository: {str(e)}")
+                else:
+                    logger.error("No GitHub info provided and repository path doesn't exist")
+                    raise ValueError("Repository not accessible")
+
             # Extract owner/repo from path if it's in that format
             try:
                 owner, repo = os.path.basename(os.path.dirname(repo_path)), os.path.basename(repo_path)
@@ -71,12 +93,14 @@ class AgentOrchestrator:
                         structure=structure,
                         github_info=github_info
                     )
-                    if not agent_suggestions:
-                        logger.info(f"No suggestions from {agent.__class__.__name__}")
-                        continue
-                        
-                    logger.info(f"Got {len(agent_suggestions)} suggestions from {agent.__class__.__name__}")
                     
+                    if agent_suggestions:
+                        self.agent_stats[agent.__class__.__name__] = len(agent_suggestions)
+                        logger.info(f"Got {len(agent_suggestions)} suggestions from {agent.__class__.__name__}")
+                    else:
+                        self.agent_stats[agent.__class__.__name__] = 0
+                        logger.info(f"No suggestions from {agent.__class__.__name__}")
+                        
                     for sugg in agent_suggestions:
                         # Remove id from suggestion dict since it's auto-generated
                         suggestion = {

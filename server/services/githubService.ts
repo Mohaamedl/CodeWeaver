@@ -173,6 +173,92 @@ export class GitHubService {
       throw new Error('Failed to fetch file contents from GitHub');
     }
   }
+
+  /**
+   * Get repository branches
+   */
+  async getBranches(accessToken: string, owner: string, repo: string): Promise<string[]> {
+    const response = await axios.get(
+      `https://api.github.com/repos/${owner}/${repo}/branches`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      }
+    );
+    return response.data.map((branch: any) => branch.name);
+  }
+
+  /**
+   * Create a new branch
+   */
+  async createBranch(
+    accessToken: string,
+    owner: string,
+    repo: string,
+    baseBranch: string,
+    newBranch: string
+  ): Promise<any> {
+    // First get the SHA of the base branch
+    const baseRef = await axios.get(
+      `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${baseBranch}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      }
+    );
+
+    // Create the new branch
+    const response = await axios.post(
+      `https://api.github.com/repos/${owner}/${repo}/git/refs`,
+      {
+        ref: `refs/heads/${newBranch}`,
+        sha: baseRef.data.object.sha,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      }
+    );
+
+    return response.data;
+  }
+
+  /**
+   * Create a pull request
+   */
+  async createPullRequest(
+    accessToken: string,
+    owner: string,
+    repo: string,
+    baseBranch: string,
+    headBranch: string,
+    title: string,
+    body: string
+  ): Promise<any> {
+    const response = await axios.post(
+      `https://api.github.com/repos/${owner}/${repo}/pulls`,
+      {
+        title,
+        body,
+        head: headBranch,
+        base: baseBranch,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      }
+    );
+
+    return response.data;
+  }
 }
 
 export default new GitHubService();

@@ -18,13 +18,15 @@ class GitHubAPI:
 
     async def get_repo_info(self, owner: str, repo: str) -> Dict[str, Any]:
         """Get repository information including default branch."""
+        logger.info(f"Fetching repo info for {owner}/{repo} via GitHub API")
         async with aiohttp.ClientSession() as session:
             url = f"{self.base_url}/repos/{owner}/{repo}"
             async with session.get(url, headers=self.headers) as response:
                 if response.status == 404:
+                    logger.error(f"Repository {owner}/{repo} not found")
                     raise ValueError(f"Repository {owner}/{repo} not found")
-                data = await response.json()
-                return data
+                logger.info(f"Successfully fetched repo info for {owner}/{repo}")
+                return await response.json()
 
     async def get_tree_recursive(self, owner: str, repo: str, sha: str) -> Dict[str, Any]:
         """Get complete tree of repository contents."""
@@ -37,16 +39,20 @@ class GitHubAPI:
 
     async def get_file_content(self, owner: str, repo: str, path: str, ref: str = None) -> str:
         """Get file content directly from GitHub API."""
+        logger.info(f"Fetching file content for {owner}/{repo}/{path} via GitHub API")
         async with aiohttp.ClientSession() as session:
             url = f"{self.base_url}/repos/{owner}/{repo}/contents/{path}"
             if ref:
                 url += f"?ref={ref}"
             async with session.get(url, headers=self.headers) as response:
                 if response.status == 404:
+                    logger.warning(f"File {path} not found in {owner}/{repo}")
                     return None
                 data = await response.json()
                 if isinstance(data, dict) and 'content' in data:
+                    logger.info(f"Successfully fetched content for {path}")
                     return base64.b64decode(data['content']).decode('utf-8')
+                logger.warning(f"Unexpected response format for {path}")
                 return None
 
     async def update_repository(self, owner: str, repo: str) -> str:

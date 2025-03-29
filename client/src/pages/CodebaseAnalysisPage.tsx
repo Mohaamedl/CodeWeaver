@@ -62,7 +62,8 @@ const CodebaseAnalysisPage = () => {
       }
 
       const githubToken = localStorage.getItem('github_token');
-      console.log('Token status:', githubToken ? 'Present' : 'Missing');
+      console.log('Starting review process...');
+      console.log('Repository:', selectedRepo.owner.login + '/' + selectedRepo.name);
       
       if (!githubToken || !isAuthenticated) {
         console.log('No token or not authenticated, storing current path');
@@ -72,6 +73,7 @@ const CodebaseAnalysisPage = () => {
       }
 
       // First get the repository path
+      console.log('Getting repository path...');
       const pathResponse = await fetch(`/api/repository/${selectedRepo.owner.login}/${selectedRepo.name}/path`, {
         credentials: 'include',
         headers: {
@@ -84,7 +86,9 @@ const CodebaseAnalysisPage = () => {
       }
 
       const { path: repoPath } = await pathResponse.json();
+      console.log('Repository path:', repoPath);
 
+      console.log('Sending review request...');
       const response = await fetch('http://localhost:8000/review', {
         method: 'POST',
         headers: { 
@@ -92,9 +96,11 @@ const CodebaseAnalysisPage = () => {
           'Accept': 'application/json',
           'Authorization': `Bearer ${githubToken}`
         },
-        credentials: 'include', // Important: include credentials
+        credentials: 'include',
         body: JSON.stringify({
           path: repoPath,
+          owner: selectedRepo.owner.login,
+          repo: selectedRepo.name,
           structure: repositoryStructure
         }),
       });
