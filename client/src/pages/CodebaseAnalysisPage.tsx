@@ -3,11 +3,12 @@ import RepositoryList from '@/components/RepositoryList';
 import { ReviewPanel } from '@/components/ReviewPanel';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/hooks/useAuth';
 import { GitHubRepository } from '@/types/github';
 import { ReviewSession } from '@/types/review';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Code, Loader2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const CodebaseAnalysisPage = () => {
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepository | null>(null);
@@ -15,6 +16,19 @@ const CodebaseAnalysisPage = () => {
   const { toast } = useToast();
   const [repositoryStructure, setRepositoryStructure] = useState<any>(null);
   const [currentSession, setCurrentSession] = useState<ReviewSession | null>(null);
+  const { isAuthenticated, login } = useAuth();
+
+  useEffect(() => {
+    // Check URL params for token
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    if (token) {
+      console.log('Got GitHub token from URL');
+      localStorage.setItem('github_token', token);
+      // Clean URL
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
 
   // Fetch repository structure when a repo is selected
   const { data: treeData } = useQuery({
@@ -47,21 +61,42 @@ const CodebaseAnalysisPage = () => {
         throw new Error('Repository structure not loaded');
       }
 
-      console.log('Starting review with structure:', repositoryStructure);
+      const githubToken = localStorage.getItem('github_token');
+      console.log('Token status:', githubToken ? 'Present' : 'Missing');
+      
+      if (!githubToken || !isAuthenticated) {
+        console.log('No token or not authenticated, storing current path');
+        localStorage.setItem('returnPath', window.location.pathname);
+        login();
+        throw new Error('Please log in to continue');
+      }
 
-      const payload = {
-        path: `${selectedRepo.owner.login}/${selectedRepo.name}`,
-        structure: repositoryStructure
-      };
-      console.log('Sending payload:', payload);
+      // First get the repository path
+      const pathResponse = await fetch(`/api/repository/${selectedRepo.owner.login}/${selectedRepo.name}/path`, {
+        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${githubToken}`
+        }
+      });
+
+      if (!pathResponse.ok) {
+        throw new Error('Failed to get repository path');
+      }
+
+      const { path: repoPath } = await pathResponse.json();
 
       const response = await fetch('http://localhost:8000/review', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${githubToken}`
         },
-        body: JSON.stringify(payload),
+        credentials: 'include', // Important: include credentials
+        body: JSON.stringify({
+          path: repoPath,
+          structure: repositoryStructure
+        }),
       });
 
       if (!response.ok) {

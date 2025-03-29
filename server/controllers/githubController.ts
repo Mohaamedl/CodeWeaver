@@ -1,7 +1,10 @@
+import { GitHubTree } from '@shared/schema';
 import { Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
+import simpleGit from 'simple-git';
 import githubService from '../services/githubService';
 import { storage } from '../storage';
-import { GitHubRepository, GitHubTree } from '@shared/schema';
 
 export class GitHubController {
   /**
@@ -10,54 +13,62 @@ export class GitHubController {
   async handleOAuthCallback(req: Request, res: Response) {
     try {
       const { code } = req.query;
-
       if (!code || typeof code !== 'string') {
-        return res.status(400).json({ message: 'Authorization code is required' });
+        return res.redirect(`${process.env.APP_BASE_URL}?authError=true`);
       }
 
-      // Exchange code for access token
       const { accessToken, refreshToken } = await githubService.getAccessToken(code);
-
-      // Get user profile
       const githubUser = await githubService.getUserProfile(accessToken);
 
-      // Check if user exists
       let user = await storage.getUserByGithubId(githubUser.id);
-
       if (!user) {
-        // Create new user
         user = await storage.createUser({
           username: githubUser.login,
-          password: '', // No password for GitHub-authenticated users
           githubId: githubUser.id,
           githubUsername: githubUser.login,
           githubAccessToken: accessToken,
           githubRefreshToken: refreshToken,
         });
-      } else {
-        // Update GitHub tokens
-        user = await storage.updateUserGithubTokens(user.id, accessToken, refreshToken);
       }
 
-      // Create session
       if (req.session) {
         req.session.userId = user?.id;
         req.session.githubAccessToken = accessToken;
+        // Save session before redirect
+        await new Promise<void>((resolve, reject) => {
+          req.session.save((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
       }
 
-      // Redirect to codebase page instead of returning JSON
-      return res.redirect(`${process.env.APP_BASE_URL}/codebase`);
+      // Pass both token and user info
+      const redirectUrl = new URL(`${process.env.APP_BASE_URL}/codebase`);
+      redirectUrl.searchParams.set('token', accessToken);
+      redirectUrl.searchParams.set('userId', user.id.toString());
+      return res.redirect(redirectUrl.toString());
+
     } catch (error: any) {
-      console.error('GitHub OAuth error:', error.message);
-      // Provide more detailed error information to help debug
-      console.error('GitHub OAuth config:', {
-        clientId: process.env.GITHUB_CLIENT_ID,
-        redirectUri: `${process.env.APP_BASE_URL}/api/auth/github/callback`,
-        appBaseUrl: process.env.APP_BASE_URL
-      });
-      // Redirect to home page with error
+      console.error('GitHub OAuth error:', error);
       return res.redirect(`${process.env.APP_BASE_URL}?authError=true`);
     }
+  }
+
+  /**
+   * Get access token
+   */
+  async getAccessToken(req: Request, res: Response) {
+    console.log("Session state:", req.session);
+    console.log("Headers:", req.headers);
+
+    if (!req.session?.githubAccessToken) {
+      return res.status(401).json({ error: 'No access token found' });
+    }
+    return res.json({ 
+      token: req.session.githubAccessToken,
+      userId: req.session.userId
+    });
   }
 
   /**
@@ -145,6 +156,49 @@ export class GitHubController {
       console.error('Error getting file contents:', error.message);
       return res.status(500).json({ message: 'Failed to fetch file contents' });
     }
+  }
+
+  /**
+   * Get repository path
+   */
+  async getRepositoryPath(req: Request, res: Response) {
+    try {
+      const { owner, repo } = req.params;
+      const repoPath = path.join(process.cwd(), 'repositories', owner, repo);
+      
+      // Ensure repository is cloned first
+      if (!fs.existsSync(repoPath)) {
+        await this.cloneRepository(owner, repo);
+      }
+      
+      res.json({ path: repoPath });
+    } catch (error) {
+      console.error('Error getting repository path:', error);
+      res.status(500).json({ error: 'Failed to get repository path' });
+    }
+  }
+
+  /**
+   * Clone repository to local storage
+   */
+  async cloneRepository(owner: string, repo: string): Promise<string> {
+    const repoPath = path.join(process.cwd(), "repositories", owner, repo);
+    
+    // Create directories if they don't exist
+    await fs.promises.mkdir(path.dirname(repoPath), { recursive: true });
+    
+    // Clone or update repository
+    if (await fs.promises.access(repoPath).then(() => true).catch(() => false)) {
+      // Pull latest changes if repo exists
+      const git = simpleGit(repoPath);
+      await git.pull();
+    } else {
+      // Clone if repo doesn't exist
+      const repoUrl = `https://github.com/${owner}/${repo}.git`;
+      await simpleGit().clone(repoUrl, repoPath);
+    }
+    
+    return repoPath;
   }
 
   /**

@@ -33,47 +33,72 @@ class AgentOrchestrator:
         # We can optionally use user preferences (language, style) from chat_memory
         return CoderAgent().run(prompt, self.chat_memory)
 
-    def run_review(self, repo_path: str, structure: Dict[str, Any] = None) -> Tuple[ReviewSession, List[dict]]:
+    def run_review(self, repo_path: str, structure: Dict[str, Any] | None = None) -> Tuple[ReviewSession, List[dict]]:
         """Run all agents on the repository."""
         logger.info(f"Starting review for repository: {repo_path}")
         
+        logger.debug(f"Structure received: {structure}")
+        logger.debug(f"Repository path: {repo_path}")
+        
+        if not os.path.exists(repo_path):
+            logger.error(f"Repository path does not exist: {repo_path}")
+            raise ValueError(f"Repository path does not exist: {repo_path}")
+            
+        if not structure:
+            logger.info("No structure provided, running without repository structure analysis")
+            structure = {}  # Provide empty dict as fallback
+        
         try:
             db = SessionLocal()
-            # Create a new review session
             session = ReviewSession(repo_path=repo_path)
             db.add(session)
             db.commit()
             
             all_suggestions = []
             
-            # Run each agent
+            # Log the agents that will be run
+            logger.info(f"Running agents: {[agent.__class__.__name__ for agent in self.agents]}")
+            
             for agent in self.agents:
-                logger.info(f"Running agent: {agent.__class__.__name__}")
+                logger.info(f"Starting agent: {agent.__class__.__name__}")
                 try:
-                    # Pass both repo path and structure to agents
                     agent_suggestions = agent.run(repo_path, self.chat_memory, structure)
-                    logger.info(f"Agent {agent.__class__.__name__} found {len(agent_suggestions)} suggestions")
+                    if not agent_suggestions:
+                        logger.info(f"No suggestions from {agent.__class__.__name__}")
+                        continue
+                        
+                    logger.info(f"Got {len(agent_suggestions)} suggestions from {agent.__class__.__name__}")
                     
                     for sugg in agent_suggestions:
-                        sugg['agent'] = agent.__class__.__name__
-                        all_suggestions.append(sugg)
+                        # Remove id from suggestion dict since it's auto-generated
+                        suggestion = {
+                            'agent': agent.__class__.__name__,
+                            'message': sugg['message'],
+                            'patch': sugg.get('patch'),
+                            'file_path': sugg.get('file_path'),
+                            'status': 'pending'
+                        }
+                        all_suggestions.append(suggestion)
                         
                         # Store in database
                         db_sugg = Suggestion(
                             session_id=session.id,
-                            agent=sugg['agent'],
-                            message=sugg['message'],
-                            patch=sugg.get('patch'),
-                            file_path=sugg.get('file_path'),
-                            status='pending'
+                            **suggestion
                         )
                         db.add(db_sugg)
                 
                 except Exception as e:
                     logger.error(f"Error in agent {agent.__class__.__name__}: {str(e)}", exc_info=True)
-            
+                    
+            # Generate summary using MetaReviewAgent
+            try:
+                meta_agent = MetaReviewAgent()
+                summary = meta_agent.run(all_suggestions, self.chat_memory)
+                session.summary = summary
+            except Exception as e:
+                logger.error(f"Error generating summary: {str(e)}", exc_info=True)
+                
             db.commit()
-            logger.info(f"Review completed. Found {len(all_suggestions)} suggestions")
             return session, all_suggestions
             
         except Exception as e:

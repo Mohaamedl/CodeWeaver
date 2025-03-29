@@ -1,5 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import React from 'react';
+import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
 type ThemeContextType = {
   isDarkMode: boolean;
@@ -11,30 +10,40 @@ const ThemeContext = createContext<ThemeContextType>({
   toggleTheme: () => {},
 });
 
+const root = window.document.documentElement;
+
+const getSystemTheme = (): 'dark' | 'light' => {
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    return 'dark';
+  }
+  return 'light';
+};
+
 export const ThemeProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const [isDarkMode, setIsDarkMode] = useState(() => {
-    // Try to get the theme from localStorage
-    const savedTheme = localStorage.getItem('darkMode');
-    
-    // If there's a saved theme, use it
-    if (savedTheme !== null) {
-      return savedTheme === 'true';
+    try {
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme !== null) {
+        return savedTheme === 'dark';
+      }
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    } catch (e) {
+      console.warn('localStorage not available:', e);
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
     }
-    
-    // Otherwise, use the system preference
-    return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
   useEffect(() => {
-    // Update the document class when the theme changes
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
+    try {
+      localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+      if (isDarkMode) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    } catch (e) {
+      console.warn('Failed to save theme to localStorage:', e);
     }
-    
-    // Save the theme preference to localStorage
-    localStorage.setItem('darkMode', isDarkMode.toString());
   }, [isDarkMode]);
 
   const toggleTheme = () => {
@@ -48,4 +57,6 @@ export const ThemeProvider: React.FC<{children: ReactNode}> = ({ children }) => 
   );
 };
 
-export const useTheme = () => useContext(ThemeContext);
+export const useThemeContext = () => useContext(ThemeContext);
+
+export const useTheme = useThemeContext;

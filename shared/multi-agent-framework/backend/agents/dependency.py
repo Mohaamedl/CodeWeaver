@@ -1,12 +1,16 @@
-import os
 import difflib
+import os
+
 from backend.agents.base import BaseAgent
 from backend.chat_memory import ChatMemory
 
+
 class DependencyAgent(BaseAgent):
     """Agent that checks for dependency updates (in requirements.txt or pyproject.toml)."""
-    def run(self, repo_path: str, chat_memory: ChatMemory):
+    def run(self, repo_path: str, chat_memory: ChatMemory, structure: dict = None):
         suggestions = []
+        seen_deps = set()  # Track seen dependencies to avoid duplicates
+        
         # Check requirements.txt for pinned versions
         req_path = os.path.join(repo_path, 'requirements.txt')
         if os.path.isfile(req_path):
@@ -23,6 +27,9 @@ class DependencyAgent(BaseAgent):
                     pkg, ver = stripped.split('==', 1)
                     pkg = pkg.strip()
                     ver = ver.strip()
+                    if pkg in seen_deps:  # Skip if already suggested
+                        continue
+                    seen_deps.add(pkg)
                     if not ver or not ver[0].isdigit():
                         continue
                     ver_parts = ver.split('.')
@@ -41,6 +48,7 @@ class DependencyAgent(BaseAgent):
                             'patch': patch,
                             'file_path': 'requirements.txt'
                         })
+        
         # Check pyproject.toml for fixed versions
         pyproj_path = os.path.join(repo_path, 'pyproject.toml')
         if os.path.isfile(pyproj_path):
@@ -64,6 +72,9 @@ class DependencyAgent(BaseAgent):
                         name_part, ver_part = line.split('=', 1)
                         dep_name = name_part.strip().strip('"')
                         dep_version = ver_part.strip().strip('"')
+                        if dep_name in seen_deps:  # Skip if already suggested
+                            continue
+                        seen_deps.add(dep_name)
                         if not dep_version or not dep_version[0].isdigit():
                             continue
                         # Only suggest for exact versions (no ^ or ~)

@@ -11,21 +11,43 @@ logger = logging.getLogger(__name__)
 class LintingAgent(BaseAgent):
     """Agent that checks code for lint issues (e.g., print statements, style inconsistencies)."""
     def run(self, repo_path: str, chat_memory: Any, structure: Dict[str, Any] = None) -> List[dict]:
+        logger.info(f"LintingAgent starting with repo_path: {repo_path}")
+        logger.debug(f"Structure: {structure}")
+        
+        if not os.path.exists(repo_path):
+            logger.error(f"Repository path does not exist: {repo_path}")
+            return []
+            
         suggestions = []
         
-        # Analyze TypeScript/JavaScript files
+        # Skip these directories entirely
+        SKIP_DIRS = {'.venv', 'venv', '.env', 'node_modules', '__pycache__', 
+                    'site-packages', 'dist-packages', '.git'}
+        
+        # First handle TypeScript/JavaScript files from structure
         if structure and structure.get('children'):
             for file in self._get_all_files(structure['children']):
                 if file['path'].endswith(('.ts', '.tsx', '.js', '.jsx')):
                     suggestions.append({
                         'message': f"Consider adding ESLint and Prettier configuration for {file['path']}",
                         'file_path': file['path'],
-                        'patch': None,
-                        'status': 'pending'
+                        'patch': None
                     })
         
-        # Collect print suggestions (one per file)
+        # Then analyze Python files
+        repo_path = os.path.realpath(repo_path)
         for root, dirs, files in os.walk(repo_path):
+            # Remove excluded dirs from dirs list to prevent recursion into them
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            
+            # Skip if we're in an excluded directory
+            if any(skip_dir in root.split(os.sep) for skip_dir in SKIP_DIRS):
+                continue
+                
+            # Check if we're inside the project directory
+            if not os.path.realpath(root).startswith(repo_path):
+                continue
+
             for file in files:
                 if not file.endswith('.py'):
                     continue

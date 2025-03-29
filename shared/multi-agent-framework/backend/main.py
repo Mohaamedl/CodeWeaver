@@ -25,7 +25,7 @@ class GenerateResponse(BaseModelV2):
 
 class ReviewRequest(BaseModelV2):
     path: str
-    structure: Dict[str, Any]  # Repository structure
+    structure: Dict[str, Any] | None = None  # Make structure optional with default None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class ReviewSuggestion(BaseModelV2):
@@ -71,33 +71,39 @@ def generate_code(req: GenerateRequest):
 async def review_code(req: ReviewRequest) -> ReviewResponse:
     """Run code review on the repository."""
     logger.debug(f"Received review request for path: {req.path}")
-    logger.debug(f"Repository structure: {req.structure}")
     
     try:
         orchestrator = AgentOrchestrator()
-        # Pass both path and structure
         session, suggestions = orchestrator.run_review(req.path, req.structure)
         
-        logger.debug(f"Generated {len(suggestions)} suggestions")
-        logger.debug(f"Suggestions: {suggestions}")
-        
-        formatted_suggestions = []
-        for i, sugg in enumerate(suggestions):
-            formatted_sugg = ReviewSuggestion(
-                id=i,
-                agent=sugg['agent'],
-                message=sugg['message'],
-                patch=sugg.get('patch'),
-                file_path=sugg.get('file_path'),
-                status='pending'
+        # Query suggestions from database to get their assigned IDs
+        db = SessionLocal()
+        try:
+            db_suggestions = (
+                db.query(Suggestion)
+                .filter(Suggestion.session_id == session.id)
+                .order_by(Suggestion.id)
+                .all()
             )
-            formatted_suggestions.append(formatted_sugg)
-        
+            
+            formatted_suggestions = [
+                ReviewSuggestion(
+                    id=sugg.id,  # Use DB-assigned ID
+                    agent=sugg.agent,
+                    message=sugg.message,
+                    patch=sugg.patch,
+                    file_path=sugg.file_path,
+                    status=sugg.status
+                )
+                for sugg in db_suggestions
+            ]
+        finally:
+            db.close()
+            
         response = ReviewResponse(
             session_id=session.id,
             suggestions=formatted_suggestions
         )
-        logger.debug(f"Sending response: {response}")
         return response
         
     except Exception as e:

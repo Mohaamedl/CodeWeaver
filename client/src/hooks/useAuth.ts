@@ -1,8 +1,7 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/queryClient';
-import React from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
 type User = {
   id: number;
@@ -37,27 +36,66 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     const checkAuthStatus = async () => {
       try {
         setIsLoading(true);
-        const response = await fetch('/api/auth/status', {
-          credentials: 'include',
-        });
+
+        // Check URL params first
+        const params = new URLSearchParams(window.location.search);
+        const urlToken = params.get('token');
+        const userId = params.get('userId');
+
+        if (urlToken) {
+          console.log('Found token in URL, storing...');
+          localStorage.setItem('github_token', urlToken);
+          if (userId) {
+            localStorage.setItem('userId', userId);
+          }
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+
+        const storedToken = localStorage.getItem('github_token');
         
-        const data = await response.json();
-        setIsAuthenticated(data.authenticated);
-        
-        if (data.authenticated && data.userId) {
-          setUser({
-            id: data.userId,
-            username: data.username || 'User',
-            githubUsername: data.githubUsername,
+        // Only proceed with auth check if we have a token
+        if (storedToken) {
+          const response = await fetch('/api/auth/status', {
+            credentials: 'include',
+            headers: {
+              'Authorization': `Bearer ${storedToken}`
+            }
           });
+
+          const data = await response.json();
+          console.log('Auth status:', data);
+
+          if (data.authenticated) {
+            setIsAuthenticated(true);
+            if (data.githubAccessToken && data.githubAccessToken !== storedToken) {
+              localStorage.setItem('github_token', data.githubAccessToken);
+            }
+            setUser({
+              id: data.userId,
+              username: data.username || 'User',
+              githubUsername: data.githubUsername,
+            });
+          } else {
+            handleLogout();
+          }
+        } else {
+          handleLogout();
         }
       } catch (error) {
-        console.error('Error checking auth status:', error);
+        console.error('Auth check error:', error);
+        handleLogout();
       } finally {
         setIsLoading(false);
       }
     };
-    
+
+    const handleLogout = () => {
+      setIsAuthenticated(false);
+      setUser(null);
+      localStorage.removeItem('github_token');
+      localStorage.removeItem('userId');
+    };
+
     // Check auth status on mount
     checkAuthStatus();
     
@@ -71,6 +109,29 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       window.removeEventListener('popstate', handleUrlChange);
     };
   }, []);
+
+  const handleGitHubCallback = async (code: string) => {
+    try {
+      const response = await fetch('/api/auth/github/callback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+      });
+      
+      const data = await response.json();
+      if (data.accessToken) {
+        localStorage.setItem('github_token', data.accessToken);
+        setIsAuthenticated(true);
+        setUser({
+          id: data.userId,
+          username: data.username || 'User',
+          githubUsername: data.githubUsername,
+        });
+      }
+    } catch (error) {
+      console.error('GitHub authentication error:', error);
+    }
+  };
 
   const login = () => {
     window.location.href = '/api/auth/github';

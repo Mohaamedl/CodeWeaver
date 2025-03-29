@@ -1,11 +1,13 @@
 import os
 import re
+
 from backend.agents.base import BaseAgent
 from backend.chat_memory import ChatMemory
 
+
 class LLMReviewAgent(BaseAgent):
     """Agent that uses an LLM (or heuristics) to review code for potential issues or improvements."""
-    def run(self, repo_path: str, chat_memory: ChatMemory):
+    def run(self, repo_path: str, chat_memory: ChatMemory, structure: dict = None):
         suggestions = []
         # Loop through Python files in the repository
         for root, dirs, files in os.walk(repo_path):

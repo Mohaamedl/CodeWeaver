@@ -1,9 +1,9 @@
 import express, { type Express } from "express";
-import { createServer, type Server } from "http";
 import session from "express-session";
-import { storage } from "./storage";
+import { createServer, type Server } from "http";
 import githubController from "./controllers/githubController";
 import openaiController from "./controllers/openaiController";
+import { storage } from "./storage";
 
 declare module "express-session" {
   interface SessionData {
@@ -13,16 +13,19 @@ declare module "express-session" {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Session configuration
+  // Session configuration with proper settings
   app.use(
     session({
       secret: process.env.SESSION_SECRET || "very-secret-key",
-      resave: false,
+      resave: true,
       saveUninitialized: true,
       cookie: {
         secure: process.env.NODE_ENV === "production",
-        maxAge: 1000 * 60 * 60 * 24, // 24 hours
+        maxAge: 1000 * 60 * 60 * 24, // 24 hours,
+        httpOnly: true,
+        sameSite: "lax"
       },
+      name: "codeweaver.sid"
     })
   );
 
@@ -40,6 +43,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GitHub repository routes
   app.get("/api/repositories", checkAuth, githubController.listRepositories.bind(githubController));
   app.get("/api/repository/:owner/:repo/tree", checkAuth, githubController.getRepositoryTree.bind(githubController));
+  app.get("/api/repository/:owner/:repo/path", checkAuth, githubController.getRepositoryPath.bind(githubController));
   app.get("/api/repository/:owner/:repo/contents/:path(*)", checkAuth, githubController.getFileContents.bind(githubController));
 
   // OpenAI analysis routes
@@ -51,14 +55,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/assistant/conversations/:conversationId/generate-plan", checkAuth, openaiController.generatePlan.bind(openaiController));
   app.get("/api/assistant/conversations/:conversationId/export", checkAuth, openaiController.exportPlan.bind(openaiController));
 
-  // Authentication status route
+  // Authentication status route - update to include all necessary info
   app.get("/api/auth/status", (req, res) => {
-    if (req.session && req.session.userId) {
-      res.json({ authenticated: true, userId: req.session.userId });
+    if (req.session?.userId && req.session?.githubAccessToken) {
+      res.json({ 
+        authenticated: true, 
+        userId: req.session.userId,
+        githubAccessToken: req.session.githubAccessToken,
+      });
     } else {
       res.json({ authenticated: false });
     }
   });
+
+  // Add a route to get the token
+  app.get("/api/auth/token", checkAuth, githubController.getAccessToken.bind(githubController));
 
   // GitHub OAuth initiation route
   app.get("/api/auth/github", (req, res) => {

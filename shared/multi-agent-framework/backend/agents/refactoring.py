@@ -2,19 +2,50 @@ import ast
 import difflib
 import os
 import re
+
 from backend.agents.base import BaseAgent
 from backend.chat_memory import ChatMemory
 
+
 class RefactoringAgent(BaseAgent):
     """Agent that suggests code refactorings (e.g., using modern syntax improvements)."""
-    def run(self, repo_path: str, chat_memory: ChatMemory):
+    def run(self, repo_path: str, chat_memory: ChatMemory, structure: dict = None):
         suggestions = []
+        repo_path = os.path.realpath(repo_path)
+        
+        # Skip these directories entirely
+        SKIP_DIRS = {'.venv', 'venv', '.env', 'node_modules', '__pycache__', 
+                    'site-packages', 'dist-packages', '.git'}
+                    
         for root, dirs, files in os.walk(repo_path):
+            # Remove excluded dirs from dirs list to prevent recursion into them
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            
+            # Additional checks for full paths
+            if any(skip_dir in root.split(os.sep) for skip_dir in SKIP_DIRS):
+                continue
+                
+            # Check if we're inside the project directory
+            if not os.path.realpath(root).startswith(repo_path):
+                continue
+                
             for file in files:
                 if not file.endswith('.py'):
                     continue
+                    
                 file_path = os.path.join(root, file)
+                # Ensure the file is within the project directory
+                if not os.path.realpath(file_path).startswith(os.path.realpath(repo_path)):
+                    continue
+                    
                 rel_path = os.path.relpath(file_path, repo_path)
+                
+                # Skip test files and migrations
+                if ('test_' in file or 
+                    'tests/' in rel_path or 
+                    '/migrations/' in rel_path):
+                    continue
+                    
                 try:
                     with open(file_path, 'r') as f:
                         original_lines = f.readlines()
@@ -177,27 +208,27 @@ class RefactoringAgent(BaseAgent):
                                 })
         return suggestions
 
-def _generate_patch(self, file_text, original_lines, lineno, col_offset, end_lineno, end_col_offset, new_code, rel_path):
-    """Generate unified diff patch for replacing text from (lineno,col_offset) to (end_lineno,end_col_offset) with new_code."""
-    start_index = sum(len(line) for line in original_lines[:lineno - 1]) + col_offset
-    end_index = sum(len(line) for line in original_lines[:end_lineno - 1]) + end_col_offset
-    new_file_text = file_text[:start_index] + new_code + file_text[end_index:]
+    def _generate_patch(self, file_text, original_lines, lineno, col_offset, end_lineno, end_col_offset, new_code, rel_path):
+        """Generate unified diff patch for replacing text from (lineno,col_offset) to (end_lineno,end_col_offset) with new_code."""
+        start_index = sum(len(line) for line in original_lines[:lineno - 1]) + col_offset
+        end_index = sum(len(line) for line in original_lines[:end_lineno - 1]) + end_col_offset
+        new_file_text = file_text[:start_index] + new_code + file_text[end_index:]
 
-    original_lines = file_text.splitlines(keepends=True)
-    new_lines = new_file_text.splitlines(keepends=True)
+        original_lines = file_text.splitlines(keepends=True)
+        new_lines = new_file_text.splitlines(keepends=True)
 
-    diff_lines = list(difflib.unified_diff(
-        original_lines,
-        new_lines,
-        fromfile=f"a/{rel_path}",
-        tofile=f"b/{rel_path}",
-        lineterm=''  # important: don't append extra newlines
-    ))
+        diff_lines = list(difflib.unified_diff(
+            original_lines,
+            new_lines,
+            fromfile=f"a/{rel_path}",
+            tofile=f"b/{rel_path}",
+            lineterm=''  # important: don't append extra newlines
+        ))
 
-    print("=== DIFF LINES ===")
-    for line in diff_lines:
-        print(repr(line))
+        print("=== DIFF LINES ===")
+        for line in diff_lines:
+            print(repr(line))
 
-    patch = '\n'.join(diff_lines) + '\n'
-    return patch if patch else None
+        patch = '\n'.join(diff_lines) + '\n'
+        return patch if patch else None
 
