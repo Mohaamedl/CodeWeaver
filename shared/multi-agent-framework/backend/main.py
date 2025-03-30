@@ -24,8 +24,10 @@ class GenerateResponse(BaseModelV2):
     code: str
 
 class ReviewRequest(BaseModelV2):
-    path: str
-    structure: Dict[str, Any] | None = None  # Make structure optional with default None
+    owner: str
+    repo: str
+    structure: Optional[Dict[str, Any]] = None
+    github_token: str
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class ReviewSuggestion(BaseModelV2):
@@ -70,41 +72,36 @@ def generate_code(req: GenerateRequest):
 @app.post("/review", response_model=ReviewResponse)
 async def review_code(req: ReviewRequest) -> ReviewResponse:
     """Run code review on the repository."""
-    logger.debug(f"Received review request for path: {req.path}")
+    logger.debug(f"Starting review for {req.owner}/{req.repo}")
     
     try:
         orchestrator = AgentOrchestrator()
-        session, suggestions = orchestrator.run_review(req.path, req.structure)
+        session, suggestions = await orchestrator.run_review(
+            files=None,  # Will be fetched by orchestrator
+            structure=req.structure,  # Pass structure for agent use
+            github_info={
+                'owner': req.owner,
+                'repo': req.repo,
+                'token': req.github_token
+            },
+            repo_path=f"{req.owner}/{req.repo}"  # Provide repo_path
+        )
         
-        # Query suggestions from database to get their assigned IDs
-        db = SessionLocal()
-        try:
-            db_suggestions = (
-                db.query(Suggestion)
-                .filter(Suggestion.session_id == session.id)
-                .order_by(Suggestion.id)
-                .all()
-            )
-            
-            formatted_suggestions = [
-                ReviewSuggestion(
-                    id=sugg.id,  # Use DB-assigned ID
-                    agent=sugg.agent,
-                    message=sugg.message,
-                    patch=sugg.patch,
-                    file_path=sugg.file_path,
-                    status=sugg.status
-                )
-                for sugg in db_suggestions
-            ]
-        finally:
-            db.close()
-            
-        response = ReviewResponse(
+        formatted_suggestions = [
+            ReviewSuggestion(
+                id=s.get('id', 0),
+                agent=s.get('agent', 'Unknown'),
+                message=s.get('message', ''),
+                patch=s.get('patch'),
+                file_path=s.get('file_path'),
+                status=s.get('status', 'pending')
+            ) for s in suggestions
+        ]
+        
+        return ReviewResponse(
             session_id=session.id,
             suggestions=formatted_suggestions
         )
-        return response
         
     except Exception as e:
         logger.error(f"Error during review: {str(e)}", exc_info=True)

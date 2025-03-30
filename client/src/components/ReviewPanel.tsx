@@ -1,3 +1,4 @@
+import { DiffViewer } from '@/components/DiffViewer';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -5,8 +6,7 @@ import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { ReviewSuggestion } from '@/types/review';
 import { useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 interface ReviewPanelProps {
   suggestions: ReviewSuggestion[];
@@ -28,7 +28,13 @@ export function ReviewPanel({ suggestions, sessionId }: ReviewPanelProps) {
 
   const fetchBranches = async () => {
     try {
-      const response = await fetch('/api/github/branches');
+      const selectedRepo = localStorage.getItem('selectedRepo');
+      if (!selectedRepo) {
+        throw new Error('No repository selected');
+      }
+      const { owner, repo } = JSON.parse(selectedRepo);
+      
+      const response = await fetch(`/api/github/branches?owner=${owner}&repo=${repo}`);
       if (!response.ok) throw new Error('Failed to fetch branches');
       const data = await response.json();
       setBranches(data);
@@ -106,33 +112,26 @@ export function ReviewPanel({ suggestions, sessionId }: ReviewPanelProps) {
     }
   };
 
-  const renderDiff = (patch: string) => {
-    const lines = patch.split('\n');
-    return (
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded">
-          <h4 className="font-semibold mb-2">Original</h4>
-          {lines.map((line, i) => (
-            line.startsWith('-') && (
-              <div key={i} className="text-red-600 dark:text-red-400">
-                {line.slice(1)}
-              </div>
-            )
-          ))}
-        </div>
-        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded">
-          <h4 className="font-semibold mb-2">Modified</h4>
-          {lines.map((line, i) => (
-            line.startsWith('+') && (
-              <div key={i} className="text-green-600 dark:text-green-400">
-                {line.slice(1)}
-              </div>
-            )
-          ))}
-        </div>
-      </div>
-    );
+  const handleSuggestionSelect = (suggestionId: number) => {
+    console.log('Selected suggestion:', suggestionId);
+    console.log('Previous selected:', selectedSuggestion);
+    setSelectedSuggestion(selectedSuggestion === suggestionId ? null : suggestionId);
+    setSelectedBranch('');
   };
+
+  // Debug log when suggestions change
+  useEffect(() => {
+    console.log('Suggestions received:', suggestions);
+  }, [suggestions]);
+
+  // Debug log when selection changes
+  useEffect(() => {
+    if (selectedSuggestion) {
+      const selected = suggestions.find(s => s.id === selectedSuggestion);
+      console.log('Currently selected suggestion:', selected);
+      console.log('Has patch:', selected?.patch ? 'Yes' : 'No');
+    }
+  }, [selectedSuggestion, suggestions]);
 
   if (!suggestions || suggestions.length === 0) {
     return (
@@ -145,64 +144,109 @@ export function ReviewPanel({ suggestions, sessionId }: ReviewPanelProps) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Code Review Suggestions</CardTitle>
+    <Card className="h-full overflow-auto">
+      <CardHeader className="sticky top-0 z-10 bg-background border-b">
+        <CardTitle className="flex items-center justify-between">
+          <span>Code Review Suggestions ({suggestions.length})</span>
+        </CardTitle>
       </CardHeader>
-      <CardContent>
-        <div className="space-y-4">
+      <CardContent className="pt-6">
+        <div className="space-y-6">
           {suggestions.map((suggestion) => (
-            <div
-              key={suggestion.id}
-              className={`p-4 rounded-lg border ${
-                selectedSuggestion === suggestion.id
-                  ? 'border-primary bg-primary/5'
-                  : 'border-border'
-              }`}
+            <Card 
+              key={`suggestion-${suggestion.id}-${suggestion.file_path}`}
+              className={cn(
+                "transition-colors",
+                selectedSuggestion === suggestion.id && "border-primary bg-primary/5"
+              )}
             >
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="font-semibold">{suggestion.agent}</h3>
-                  <p className="text-sm text-muted-foreground">
-                    {suggestion.message}
-                  </p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSelectedSuggestion(suggestion.id)}
-                >
-                  {selectedSuggestion === suggestion.id ? 'Selected' : 'Select'}
-                </Button>
-              </div>
-
-              {selectedSuggestion === suggestion.id && suggestion.patch && (
-                <div className="mt-4">
-                  {renderDiff(suggestion.patch)}
-                  <div className="mt-4 flex gap-2">
-                    <Button onClick={handleApplyPatch}>Apply Changes</Button>
-                    <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-                      <SelectTrigger className="w-[200px]">
-                        <SelectValue placeholder="Select base branch" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {branches.map((branch) => (
-                          <SelectItem key={branch} value={branch}>
-                            {branch}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button 
-                      onClick={createBranchAndPR}
-                      disabled={!selectedBranch}
+              <CardContent className="p-4">
+                <div className="flex flex-col gap-4">
+                  {/* Suggestion Header */}
+                  <div className="flex justify-between items-start">
+                    <div className="space-y-1.5">
+                      <div className="font-semibold text-primary">
+                        {suggestion.agent}
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        {suggestion.message}
+                      </p>
+                      {suggestion.file_path && (
+                        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
+                          {suggestion.file_path}
+                        </code>
+                      )}
+                    </div>
+                    <Button
+                      variant={selectedSuggestion === suggestion.id ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => handleSuggestionSelect(suggestion.id)}
                     >
-                      Create Branch & PR
+                      {selectedSuggestion === suggestion.id ? 'Close' : 'View'}
                     </Button>
                   </div>
+
+                  {/* Expanded Content */}
+                  {selectedSuggestion === suggestion.id && suggestion.patch && (
+                    <div className="space-y-4 pt-4 border-t">
+                      {/* Code Comparison */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <h4 className="text-sm font-medium mb-2">Original</h4>
+                          <div className="rounded-md border bg-muted/10 p-4">
+                            <DiffViewer 
+                              patch={suggestion.patch}
+                              mode="original"
+                              className="max-h-[300px] overflow-auto"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-medium mb-2">Modified</h4>
+                          <div className="rounded-md border bg-muted/10 p-4">
+                            <DiffViewer 
+                              patch={suggestion.patch}
+                              mode="modified"
+                              className="max-h-[300px] overflow-auto"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex items-center gap-2 pt-2">
+                        <Button onClick={handleApplyPatch}>
+                          Apply Changes
+                        </Button>
+                        <div className="flex-1">
+                          <Select value={selectedBranch} onValueChange={setSelectedBranch}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select branch" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {branches.map((branch) => (
+                                <SelectItem 
+                                  key={`branch-${suggestion.id}-${branch}`} 
+                                  value={branch}
+                                >
+                                  {branch}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <Button 
+                          onClick={createBranchAndPR}
+                          disabled={!selectedBranch}
+                        >
+                          Create PR
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       </CardContent>

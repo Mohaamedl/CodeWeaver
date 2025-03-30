@@ -2,7 +2,8 @@ import difflib
 import logging
 import os
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
+import asyncio
 
 from backend.agents.coder import CoderAgent
 from backend.agents.dependency import DependencyAgent
@@ -13,97 +14,129 @@ from backend.agents.refactoring import RefactoringAgent
 from backend.chat_memory import ChatMemory
 from backend.db.database import SessionLocal
 from backend.db.models import ReviewSession, Suggestion
+from backend.services.github import GitHubAPI
 
 logger = logging.getLogger(__name__)
 
 class AgentOrchestrator:
     def __init__(self):
         self.chat_memory = ChatMemory()
-        # Initialize all agents
         self.agents = [
             LintingAgent(),
             RefactoringAgent(),
             DependencyAgent(),
             LLMReviewAgent()
         ]
+        self.agent_stats = {}
         logger.info(f"Initialized {len(self.agents)} agents")
 
     def generate_code(self, prompt: str) -> str:
         """Generate code from a prompt using the CoderAgent."""
-        # We can optionally use user preferences (language, style) from chat_memory
         return CoderAgent().run(prompt, self.chat_memory)
 
-    def run_review(self, repo_path: str, structure: Dict[str, Any] | None = None) -> Tuple[ReviewSession, List[dict]]:
-        """Run all agents on the repository."""
-        logger.info(f"Starting review for repository: {repo_path}")
+    async def run_review(
+        self,
+        files: Optional[List[Dict[str, Any]]] = None,
+        structure: Optional[Dict[str, Any]] = None,
+        github_info: Optional[Dict[str, str]] = None,
+        repo_path: Optional[str] = None,
+    ) -> Tuple[ReviewSession, List[Dict[str, Any]]]:
+        """Run code review using all agents."""
+        logger.info(f"Initialized {len(self.agents)} agents")
         
-        logger.debug(f"Structure received: {structure}")
-        logger.debug(f"Repository path: {repo_path}")
-        
-        if not os.path.exists(repo_path):
-            logger.error(f"Repository path does not exist: {repo_path}")
-            raise ValueError(f"Repository path does not exist: {repo_path}")
-            
-        if not structure:
-            logger.info("No structure provided, running without repository structure analysis")
-            structure = {}  # Provide empty dict as fallback
-        
+        # Create a new review session
+        db = SessionLocal()
         try:
-            db = SessionLocal()
-            session = ReviewSession(repo_path=repo_path)
+            # If github_info is provided, use it to construct repo_path
+            session_repo_path = repo_path
+            if github_info:
+                session_repo_path = f"{github_info['owner']}/{github_info['repo']}"
+            
+            session = ReviewSession(
+                repo_path=session_repo_path,
+                summary=""  # Initialize with empty summary
+            )
             db.add(session)
             db.commit()
+            db.refresh(session)
+            
+            # If files not provided but github_info is, fetch files from GitHub
+            if not files and github_info:
+                github = GitHubAPI(github_info['token'])
+                files = await github.analyze_repository(
+                    github_info['owner'],
+                    github_info['repo']
+                )
             
             all_suggestions = []
             
-            # Log the agents that will be run
-            logger.info(f"Running agents: {[agent.__class__.__name__ for agent in self.agents]}")
-            
+            # Run each agent
             for agent in self.agents:
-                logger.info(f"Starting agent: {agent.__class__.__name__}")
+                agent_name = agent.__class__.__name__
+                logger.info(f"Running {agent_name}")
+                
                 try:
-                    agent_suggestions = agent.run(repo_path, self.chat_memory, structure)
-                    if not agent_suggestions:
-                        logger.info(f"No suggestions from {agent.__class__.__name__}")
-                        continue
-                        
-                    logger.info(f"Got {len(agent_suggestions)} suggestions from {agent.__class__.__name__}")
-                    
-                    for sugg in agent_suggestions:
-                        # Remove id from suggestion dict since it's auto-generated
-                        suggestion = {
-                            'agent': agent.__class__.__name__,
-                            'message': sugg['message'],
-                            'patch': sugg.get('patch'),
-                            'file_path': sugg.get('file_path'),
-                            'status': 'pending'
-                        }
-                        all_suggestions.append(suggestion)
-                        
-                        # Store in database
-                        db_sugg = Suggestion(
-                            session_id=session.id,
-                            **suggestion
+                    # Check if agent's run method is a coroutine
+                    if asyncio.iscoroutinefunction(agent.run):
+                        suggestions = await agent.run(
+                            self.chat_memory,
+                            structure=structure,
+                            files=files,
+                            github_info=github_info,
+                            repo_path=repo_path
                         )
-                        db.add(db_sugg)
-                
-                except Exception as e:
-                    logger.error(f"Error in agent {agent.__class__.__name__}: {str(e)}", exc_info=True)
+                    else:
+                        suggestions = agent.run(
+                            self.chat_memory,
+                            structure=structure,
+                            files=files,
+                            github_info=github_info,
+                            repo_path=repo_path
+                        )
                     
+                    logger.info(f"Received {len(suggestions)} suggestions from {agent_name}")
+                    
+                    # Store suggestions in database with proper agent name and IDs
+                    for suggestion in suggestions:
+                        db_suggestion = Suggestion(
+                            session_id=session.id,
+                            agent=agent_name,  # Use the actual agent class name
+                            message=suggestion.get('message', ''),
+                            patch=suggestion.get('patch'),
+                            file_path=suggestion.get('file_path'),
+                            status='pending'
+                        )
+                        db.add(db_suggestion)
+                        db.commit()
+                        db.refresh(db_suggestion)
+                        
+                        # Add the suggestion with its new ID to all_suggestions
+                        all_suggestions.append({
+                            'id': db_suggestion.id,  # Use the database-generated ID
+                            'agent': agent_name,
+                            'message': suggestion.get('message', ''),
+                            'patch': suggestion.get('patch'),
+                            'file_path': suggestion.get('file_path'),
+                            'status': 'pending'
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error running {agent_name}: {str(e)}", exc_info=True)
+                    continue
+            
             # Generate summary using MetaReviewAgent
-            try:
-                meta_agent = MetaReviewAgent()
-                summary = meta_agent.run(all_suggestions, self.chat_memory)
-                session.summary = summary
-            except Exception as e:
-                logger.error(f"Error generating summary: {str(e)}", exc_info=True)
-                
-            db.commit()
+            meta_agent = next((a for a in self.agents if isinstance(a, MetaReviewAgent)), None)
+            if meta_agent:
+                try:
+                    summary = meta_agent.run(all_suggestions, self.chat_memory)
+                    session.summary = summary
+                    db.commit()
+                except Exception as e:
+                    logger.error(f"Error generating summary: {str(e)}", exc_info=True)
+            
+            logger.info(f"Review completed. Found {len(all_suggestions)} total suggestions.")
             return session, all_suggestions
             
-        except Exception as e:
-            logger.error(f"Error during review: {str(e)}", exc_info=True)
-            raise
         finally:
             db.close()
 
@@ -126,7 +159,6 @@ def apply_patch_to_file(patch: str, repo_path: str) -> bool:
     target_file = None
     for line in lines:
         if line.startswith('+++ '):
-            # Extract file path after '+++ b/' or '+++ '
             if line.startswith('+++ b/'):
                 target_file = line[6:]
             else:
@@ -158,13 +190,11 @@ def apply_patch_to_file(patch: str, repo_path: str) -> bool:
 
     while i < len(lines):
         line = lines[i]
-        # Skip lines that start with '--- ' or '+++ '
         if line.startswith('--- ') or line.startswith('+++ '):
             i += 1
             continue
 
         if line.startswith('@@'):
-            # Hunk header
             import re
             m = re.match(r'^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@', line)
             if m:
@@ -174,38 +204,30 @@ def apply_patch_to_file(patch: str, repo_path: str) -> bool:
             logging.debug("Found hunk header: %s -> original_start=%d", line, orig_start)
 
             orig_index = orig_start - 1
-            # copy unchanged lines from pointer up to start of hunk
             if pointer < orig_index:
                 logging.debug("Copying unchanged lines from pointer=%d to orig_index=%d", pointer, orig_index)
                 new_lines.extend(original_lines[pointer:orig_index])
                 pointer = orig_index
 
             i += 1
-            # process hunk lines
             while i < len(lines) and not lines[i].startswith('@@'):
                 hunk_line = lines[i]
                 if hunk_line.startswith(' '):
-                    # context line
                     new_lines.append(hunk_line[1:] + "\n")
                     pointer += 1
                 elif hunk_line.startswith('-'):
-                    # removed line
                     pointer += 1
                 elif hunk_line.startswith('+'):
-                    # added line
                     new_lines.append(hunk_line[1:] + "\n")
                 i += 1
         else:
-            # If we don't see '@@', '+++', or '---', skip
             i += 1
 
-    # copy remaining lines after last hunk
     if pointer < len(original_lines):
         logging.debug("Copying remaining lines from pointer=%d to end (total %d).",
                       pointer, len(original_lines))
         new_lines.extend(original_lines[pointer:])
 
-    # Write new content to file
     try:
         with open(file_path, 'w') as f:
             f.writelines(new_lines)

@@ -66,76 +66,44 @@ const CodebaseAnalysisPage = () => {
       console.log('Repository:', selectedRepo.owner.login + '/' + selectedRepo.name);
       
       if (!githubToken || !isAuthenticated) {
-        console.log('No token or not authenticated, storing current path');
-        localStorage.setItem('returnPath', window.location.pathname);
-        login();
+        console.log('No token or not authenticated');
         throw new Error('Please log in to continue');
       }
 
-      // First get the repository path
-      console.log('Getting repository path...');
-      const pathResponse = await fetch(`/api/repository/${selectedRepo.owner.login}/${selectedRepo.name}/path`, {
-        credentials: 'include',
-        headers: {
-          'Authorization': `Bearer ${githubToken}`
-        }
-      });
-
-      if (!pathResponse.ok) {
-        throw new Error('Failed to get repository path');
-      }
-
-      const { path: repoPath } = await pathResponse.json();
-      console.log('Repository path:', repoPath);
-
-      console.log('Sending review request...');
       const response = await fetch('http://localhost:8000/review', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Accept': 'application/json',
           'Authorization': `Bearer ${githubToken}`
         },
-        credentials: 'include',
         body: JSON.stringify({
-          path: repoPath,
           owner: selectedRepo.owner.login,
           repo: selectedRepo.name,
-          structure: repositoryStructure
-        }),
+          structure: repositoryStructure,
+          github_token: githubToken
+        })
       });
 
       if (!response.ok) {
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          const error = await response.json();
-          throw new Error(error.detail || 'Failed to start review');
-        } else {
-          const text = await response.text();
-          console.error('Non-JSON response:', text);
-          throw new Error('Invalid server response');
-        }
+        const error = await response.json();
+        throw new Error(error.detail || 'Failed to start review');
       }
 
       const data = await response.json();
-      console.log('Review response:', data);
-      
-      if (!data.suggestions) {
-        console.warn('No suggestions array in response:', data);
-        data.suggestions = [];
+      if (!data || !data.suggestions) {
+        throw new Error('Invalid response format');
       }
-      
-      return data as ReviewSession;
+
+      return data;
     },
     onSuccess: (data) => {
       if (!data.suggestions || data.suggestions.length === 0) {
-        console.log('No suggestions found');
         toast({
           title: 'Review completed',
           description: 'No suggestions found for this repository',
         });
       } else {
-        console.log(`Found ${data.suggestions.length} suggestions:`, data.suggestions);
+        console.log(`Found ${data.suggestions.length} suggestions`);
         setCurrentSession(data);
         toast({
           title: 'Review completed',
@@ -160,6 +128,12 @@ const CodebaseAnalysisPage = () => {
     setCurrentSession(null);
     
     try {
+      // Store selected repo info for use in other components
+      localStorage.setItem('selectedRepo', JSON.stringify({
+        owner: repository.owner.login,
+        repo: repository.name
+      }));
+
       const response = await fetch(
         `/api/repository/${repository.owner.login}/${repository.name}/tree`,
         {
