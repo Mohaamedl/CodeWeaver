@@ -1,20 +1,35 @@
-import os
 import difflib
+import logging
+import os
+from typing import Any, Dict, List, Optional
+
 from backend.agents.base import BaseAgent
 from backend.chat_memory import ChatMemory
 
+logger = logging.getLogger(__name__)
+
 class DependencyAgent(BaseAgent):
-    """Agent that checks for dependency updates (in requirements.txt or pyproject.toml)."""
-    def run(self, repo_path: str, chat_memory: ChatMemory):
+    """Agent that checks for dependency updates."""
+    
+    async def analyze_files(
+        self,
+        files: List[Dict[str, Any]],
+        chat_memory: ChatMemory,
+        structure: Optional[Dict[str, Any]] = None,
+        github_info: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, Any]]:
+        """Analyze files from GitHub API."""
         suggestions = []
-        # Check requirements.txt for pinned versions
-        req_path = os.path.join(repo_path, 'requirements.txt')
-        if os.path.isfile(req_path):
+        
+        # Check for requirements.txt
+        req_file = next((f for f in files if f['path'].endswith('requirements.txt')), None)
+        if req_file:
             try:
-                with open(req_path, 'r') as f:
-                    req_lines = f.readlines()
+                req_lines = req_file['content'].splitlines()
             except Exception as e:
+                logger.error(f"Error reading requirements.txt: {e}")
                 req_lines = []
+            seen_deps = set()
             for line in req_lines:
                 stripped = line.strip()
                 if not stripped or stripped.startswith('#'):
@@ -23,6 +38,9 @@ class DependencyAgent(BaseAgent):
                     pkg, ver = stripped.split('==', 1)
                     pkg = pkg.strip()
                     ver = ver.strip()
+                    if pkg in seen_deps:  # Skip if already suggested
+                        continue
+                    seen_deps.add(pkg)
                     if not ver or not ver[0].isdigit():
                         continue
                     ver_parts = ver.split('.')
@@ -41,14 +59,16 @@ class DependencyAgent(BaseAgent):
                             'patch': patch,
                             'file_path': 'requirements.txt'
                         })
-        # Check pyproject.toml for fixed versions
-        pyproj_path = os.path.join(repo_path, 'pyproject.toml')
-        if os.path.isfile(pyproj_path):
+
+        # Check for pyproject.toml
+        pyproject_file = next((f for f in files if f['path'].endswith('pyproject.toml')), None)
+        if pyproject_file:
             try:
-                with open(pyproj_path, 'r') as f:
-                    toml_lines = f.readlines()
+                toml_lines = pyproject_file['content'].splitlines()
             except Exception as e:
+                logger.error(f"Error reading pyproject.toml: {e}")
                 toml_lines = []
+            seen_deps = set()
             in_deps = False
             for line in toml_lines:
                 if line.strip() == '[tool.poetry.dependencies]':
@@ -64,6 +84,9 @@ class DependencyAgent(BaseAgent):
                         name_part, ver_part = line.split('=', 1)
                         dep_name = name_part.strip().strip('"')
                         dep_version = ver_part.strip().strip('"')
+                        if dep_name in seen_deps:  # Skip if already suggested
+                            continue
+                        seen_deps.add(dep_name)
                         if not dep_version or not dep_version[0].isdigit():
                             continue
                         # Only suggest for exact versions (no ^ or ~)
@@ -84,4 +107,14 @@ class DependencyAgent(BaseAgent):
                                     'patch': patch,
                                     'file_path': 'pyproject.toml'
                                 })
+
         return suggestions
+
+    async def analyze_local(
+        self,
+        repo_path: str,
+        chat_memory: ChatMemory,
+        structure: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """Legacy method for local repository analysis."""
+        return await self.run(chat_memory, repo_path=repo_path, structure=structure)

@@ -14,3 +14,6 @@ vite.config.ts.*
 __pycache__/
 .venv/
 shared/multi-agent-framework/backend/db/database.db
+.__pycache__
+.pyc 
+*.pyc 

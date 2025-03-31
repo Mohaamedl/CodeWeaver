@@ -1,14 +1,148 @@
 import ast
+import difflib
+import logging
 import os
+from typing import Any, Dict, List, Optional
+
 from backend.agents.base import BaseAgent
 from backend.chat_memory import ChatMemory
 
+logger = logging.getLogger(__name__)
+
 class LintingAgent(BaseAgent):
     """Agent that checks code for lint issues (e.g., print statements, style inconsistencies)."""
-    def run(self, repo_path: str, chat_memory: ChatMemory):
+
+    async def analyze_files(
+        self,
+        files: List[Dict[str, Any]],
+        chat_memory: ChatMemory,
+        structure: Optional[Dict[str, Any]] = None,
+        github_info: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, Any]]:
         suggestions = []
-        # Collect print suggestions (one per file)
+
+        for file in files:
+            if not file['path'].endswith('.py'):
+                continue
+
+            try:
+                content = file['content']
+                content_lines = content.splitlines(keepends=True)
+                tree = ast.parse(content)
+
+                # Find all print statements
+                print_nodes = []
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'print':
+                        print_nodes.append(node)
+
+                if print_nodes:
+                    # Create a copy of lines for modification
+                    new_lines = content_lines.copy()
+
+                    # Check if logging is already imported
+                    has_logging_import = False
+                    has_logger_setup = False
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Import) and any(n.name == 'logging' for n in node.names):
+                            has_logging_import = True
+                        elif isinstance(node, ast.ImportFrom) and node.module == 'logging':
+                            has_logging_import = True
+                        elif isinstance(node, ast.Assign):
+                            if isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'logger':
+                                has_logger_setup = True
+
+                    # Add logging import and setup if needed
+                    if not has_logging_import:
+                        new_lines.insert(0, 'import logging\n')
+                    if not has_logger_setup:
+                        new_lines.insert(1, 'logger = logging.getLogger(__name__)\n')
+                        if not new_lines[2].strip():  # Add a blank line after if there isn't one
+                            new_lines.insert(2, '\n')
+
+                    # Replace print statements with logging
+                    for node in print_nodes:
+                        # Calculate the correct line number
+                        start_line = node.lineno - 1  # Convert to 0-based index
+                        if not has_logging_import and not has_logger_setup:
+                            start_line += 2  # Adjust for added imports
+                        elif not has_logging_import or not has_logger_setup:
+                            start_line += 1  # Adjust for one added import
+
+                        # Get the original print statement
+                        original_line = content_lines[node.lineno - 1]
+                        indent = len(original_line) - len(original_line.lstrip())
+                        indentation = original_line[:indent]
+
+                        # Create the logging statement
+                        args = []
+                        for arg in node.args:
+                            if isinstance(arg, ast.Constant):
+                                args.append(repr(arg.value))
+                            elif isinstance(arg, ast.Name):
+                                args.append(f"{{{arg.id}}}")
+                            elif isinstance(arg, ast.JoinedStr):  # f-string
+                                args.append(ast.unparse(arg))
+                            else:
+                                args.append(f"{{{ast.unparse(arg)}}}")
+
+                        if len(args) == 1:
+                            log_msg = args[0]
+                        else:
+                            # Join with spaces and wrap in f-string if needed
+                            log_msg = 'f"' + ' '.join(args).replace('"', '\\"') + '"'
+
+                        # Replace the print statement with logging
+                        new_line = f"{indentation}logger.info({log_msg})\n"
+                        new_lines[start_line] = new_line
+
+                    # Generate unified diff
+                    diff = difflib.unified_diff(
+                        content_lines,
+                        new_lines,
+                        fromfile=f"a/{file['path']}",
+                        tofile=f"b/{file['path']}",
+                        lineterm=''
+                    )
+
+                    suggestions.append({
+                        'message': f"Replace print statements with logging in {file['path']}",
+                        'file_path': file['path'],
+                        'patch': '\n'.join(diff)
+                    })
+
+            except Exception as e:
+                logger.error(f"Error analyzing {file['path']}: {e}")
+                continue
+
+        return suggestions
+
+    async def analyze_local(
+        self,
+        repo_path: str,
+        chat_memory: ChatMemory,
+        structure: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        # Local analysis logic
+        suggestions = []
+        
+        # Skip these directories entirely
+        SKIP_DIRS = {'.venv', 'venv', '.env', 'node_modules', '__pycache__', 
+                    'site-packages', 'dist-packages', '.git'}
+        
+        repo_path = os.path.realpath(repo_path)
         for root, dirs, files in os.walk(repo_path):
+            # Remove excluded dirs from dirs list to prevent recursion into them
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            
+            # Skip if we're in an excluded directory
+            if any(skip_dir in root.split(os.sep) for skip_dir in SKIP_DIRS):
+                continue
+                
+            # Check if we're inside the project directory
+            if not os.path.realpath(root).startswith(repo_path):
+                continue
+
             for file in files:
                 if not file.endswith('.py'):
                     continue
@@ -16,111 +150,84 @@ class LintingAgent(BaseAgent):
                 rel_path = os.path.relpath(file_path, repo_path)
                 try:
                     with open(file_path, 'r') as f:
-                        original_lines = f.readlines()
-                        file_text = ''.join(original_lines)
+                        content = f.read()
+                    tree = ast.parse(content)
+                    
+                    # Check for print statements
+                    print_nodes = []
+                    content_lines = content.splitlines(keepends=True)
+                    
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'print':
+                            print_nodes.append(node)
+                    
+                    if print_nodes:
+                        # Create a patch to replace print statements with logging
+                        new_lines = content_lines.copy()
+                        
+                        # Add logging import if not present
+                        if 'import logging' not in content and 'from logging import' not in content:
+                            new_lines.insert(0, 'import logging\n\n')
+                        
+                        # Add logger setup if not present
+                        logger_setup = 'logger = logging.getLogger(__name__)\n\n'
+                        if logger_setup not in content:
+                            # Find the best place to insert logger setup (after imports)
+                            insert_pos = 0
+                            for i, line in enumerate(new_lines):
+                                if line.startswith(('import ', 'from ')):
+                                    insert_pos = i + 1
+                            new_lines.insert(insert_pos, logger_setup)
+                        
+                        # Replace print statements with logging
+                        for node in print_nodes:
+                            start_line = node.lineno - 1  # Convert to 0-based index
+                            
+                            # Get the original print statement
+                            original_line = content_lines[start_line]
+                            indent = len(original_line) - len(original_line.lstrip())
+                            indentation = original_line[:indent]
+                            
+                            # Create the logging statement
+                            args = []
+                            for arg in node.args:
+                                if isinstance(arg, ast.Constant):
+                                    args.append(repr(arg.value))
+                                elif isinstance(arg, ast.Name):
+                                    args.append(arg.id)
+                                else:
+                                    args.append(ast.unparse(arg))
+                            
+                            log_msg = ', '.join(args)
+                            new_line = f"{indentation}logger.info({log_msg})\n"
+                            new_lines[start_line] = new_line
+                        
+                        # Generate unified diff
+                        diff = difflib.unified_diff(
+                            content_lines,
+                            new_lines,
+                            fromfile=f"a/{rel_path}",
+                            tofile=f"b/{rel_path}",
+                            lineterm=''
+                        )
+                        
+                        suggestions.append({
+                            'message': f"Replace print statements with logging in {rel_path}",
+                            'file_path': rel_path,
+                            'patch': '\n'.join(diff)
+                        })
+                        
                 except Exception as e:
+                    logger.error(f"Error analyzing {rel_path}: {e}")
                     continue
-                try:
-                    tree = ast.parse(file_text)
-                except Exception as e:
-                    continue
-                print_nodes = []
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'print':
-                        # skip print calls with keywords that we can't handle well (e.g., file=)
-                        if any(k.arg and k.arg != 'end' and k.arg != 'sep' for k in node.keywords):
-                            continue
-                        print_nodes.append(node)
-                if not print_nodes:
-                    continue
-                # Prepare modified file with logging
-                new_file_text = file_text
-                # Insert import logging if not present
-                import_snippet = None
-                if 'import logging' not in file_text:
-                    # Determine insertion point (after shebang or module docstring if any)
-                    insert_line = 0
-                    if original_lines and original_lines[0].startswith('#!'):
-                        insert_line = 1
-                    # Check for module docstring
-                    if len(tree.body) > 0 and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.Constant) and isinstance(tree.body[0].value.value, str):
-                        doc_node = tree.body[0].value
-                        insert_line = doc_node.end_lineno or insert_line
-                    insert_pos = sum(len(line) for line in original_lines[:insert_line])
-                    import_snippet = 'import logging\n'
-                    # Will insert later as part of replacements
-                    # Actually insert now in text for subsequent char offsets to be correct
-                    new_file_text = new_file_text[:insert_pos] + import_snippet + new_file_text[insert_pos:]
-                # Sort print nodes by start position (lineno, col)
-                print_nodes.sort(key=lambda n: (n.lineno, n.col_offset))
-                # Apply replacements for print nodes from bottom to top (reverse order)
-                for node in sorted(print_nodes, key=lambda n: (n.lineno, n.col_offset), reverse=True):
-                    # Build logging call code
-                    log_call = self._build_logging_call(node)
-                    if log_call is None:
-                        continue
-                    # Compute char offsets for this print call in current new_file_text (which may include previous insert)
-                    # We need to recalc using new_file_text content because if import was inserted, offsets shifted
-                    # But easier: we adjust node.lineno if import was inserted at top
-                    if import_snippet and ( (insert_line == 0) or (insert_line <= node.lineno - 1) ):
-                        # If import inserted before this print's line, node's line offset needs to shift by 1
-                        offset_lines = import_snippet.count('\n')
-                        node_line = node.lineno + offset_lines
-                        start_index = sum(len(line) for line in original_lines[:node.lineno-1]) + node.col_offset + len(import_snippet) if insert_line <= node.lineno - 1 else sum(len(line) for line in original_lines[:node.lineno-1]) + node.col_offset
-                    else:
-                        node_line = node.lineno
-                        start_index = sum(len(line) for line in original_lines[:node_line-1]) + node.col_offset
-                    end_index = sum(len(line) for line in original_lines[:node.end_lineno-1]) + node.end_col_offset
-                    new_file_text = new_file_text[:start_index] + log_call + new_file_text[end_index:]
-                # Generate diff patch
-                import difflib
-                new_lines = new_file_text.splitlines(True)
-                diff_lines = difflib.unified_diff(original_lines, new_lines, fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}", lineterm='')
-                patch = ''.join(diff_lines)
-                if patch:
-                    suggestions.append({
-                        'message': f"Replace print statements with logging in {rel_path}.",
-                        'patch': patch,
-                        'file_path': rel_path
-                    })
-        # Suggest indentation style fix if needed
-        indent_style = chat_memory.inferred_prefs.get('indent_style')
-        expected = chat_memory.user_prefs.get('indent_style')
-        if expected and indent_style and indent_style != expected:
-            if indent_style == 'mixed':
-                msg = "Inconsistent indentation (mix of tabs and spaces) detected. Consider using spaces consistently."
-            elif indent_style == 'tabs':
-                msg = "Tabs are used for indentation, but spaces are recommended (PEP 8). Consider converting tabs to spaces."
-            else:
-                msg = f"Indentation style is {indent_style}, but expected {expected}. Consider standardizing the style."
-            suggestions.append({'message': msg, 'patch': None, 'file_path': None})
+                    
         return suggestions
 
-    def _build_logging_call(self, print_node):
-        """Generate the code string for a logging.info call equivalent to the given print() call."""
-        # Determine logging function (use info by default)
-        func_call = "logging.info"
-        # Build logging arguments
-        args = print_node.args
-        if len(args) == 0:
-            # print() with no arguments -> logging.info('') to just print a blank line
-            return f"{func_call}('')"
-        if len(args) == 1:
-            arg = args[0]
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                # single string
-                return f"{func_call}({repr(arg.value)})"
-            else:
-                # single non-string -> use %r or just cast to str
-                return f"{func_call}(f'{{{ast.unparse(arg)}}}')"
-        # multiple args -> combine into one string
-        parts = []
-        for i, arg in enumerate(args):
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                parts.append(arg.value)
-            else:
-                parts.append('{' + ast.unparse(arg) + '}')
-            if i < len(args) - 1:
-                parts.append(' ')  # add space separator
-        combined = ''.join(parts)
-        return f"{func_call}(f'{combined}')"
+    def _get_all_files(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        files = []
+        for item in items:
+            if item['type'] == 'file':
+                files.append(item)
+            elif item['type'] == 'directory' and item.get('children'):
+                files.extend(self._get_all_files(item['children']))
+        return files

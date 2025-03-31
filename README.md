@@ -57,7 +57,7 @@ The application helps developers understand complex codebases, identify architec
 - Node.js (v16+)
 - npm or yarn
 - MongoDB (optional - falls back to in-memory storage)
-- GitHub OAuth App credentials
+- GitHub App credentials
 - OpenAI API key
 
 ### Clone and Install
@@ -78,12 +78,15 @@ npm install
 Create a `.env` file in the root directory with the following variables:
 
 ```
-# Application URL - IMPORTANT for GitHub OAuth redirect
+# Application URL - IMPORTANT for GitHub App webhooks
 APP_BASE_URL=http://localhost:5000
 
-# GitHub OAuth credentials - Create at https://github.com/settings/developers
-GITHUB_CLIENT_ID=your_github_client_id
-GITHUB_CLIENT_SECRET=your_github_client_secret
+# GitHub App credentials - Create at https://github.com/settings/apps
+GITHUB_APP_ID=your_github_app_id
+GITHUB_APP_NAME=your_app_name
+GITHUB_PRIVATE_KEY=your_private_key
+GITHUB_INSTALLATION_ID=your_installation_id
+GITHUB_WEBHOOK_SECRET=your_webhook_secret
 
 # OpenAI API key - Get from https://platform.openai.com/api-keys
 OPENAI_API_KEY=your_openai_api_key
@@ -95,12 +98,30 @@ SESSION_SECRET=a_secure_random_string_for_session_cookies
 MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/codeweaver?retryWrites=true&w=majority
 ```
 
-### GitHub OAuth App Setup
+### GitHub App Setup
 
-1. Go to your GitHub account Settings > Developer Settings > OAuth Apps
-2. Create a new OAuth App
+1. Go to your GitHub account Settings > Developer Settings > GitHub Apps
+2. Create a new GitHub App
 3. Set the Homepage URL to match your APP_BASE_URL in .env
-4. Set the Authorization callback URL to `${APP_BASE_URL}/api/auth/github/callback`
+4. Set the Webhook URL to `${APP_BASE_URL}/api/github/webhook`
+5. Generate and set a Webhook Secret
+6. Configure the following permissions:
+   - Repository permissions:
+     - Contents: Read & write
+     - Pull requests: Read & write
+     - Metadata: Read-only
+   - User permissions:
+     - Email addresses: Read-only
+     - Profile: Read-only
+7. Subscribe to the following events:
+   - Installation
+   - Pull requests
+   - Push
+   - Repository
+8. After creating the app, note down:
+   - App ID
+   - Generate and download the private key
+   - Installation ID (after installing the app on your account)
 
 ## Usage
 
@@ -128,8 +149,8 @@ npm start
 ### Authentication Endpoints
 
 - `GET /api/auth/status` - Check authentication status
-- `GET /api/auth/github` - Initiate GitHub OAuth flow
-- `GET /api/auth/github/callback` - GitHub OAuth callback
+- `GET /api/auth/github` - Initiate GitHub App installation
+- `POST /api/github/webhook` - GitHub App webhook handler
 - `POST /api/auth/logout` - Log out the current user
 
 ### GitHub Integration Endpoints
@@ -150,13 +171,14 @@ npm start
 
 ### Common Issues
 
-#### GitHub OAuth Connection Issues
+#### GitHub App Connection Issues
 
-If you encounter "github.com refused to connect" errors when authenticating with GitHub:
+If you encounter issues with GitHub App authentication:
 
-1. Verify your GitHub OAuth App settings match the callback URL in your environment configuration
-2. Check for network restrictions if deploying on platforms like Replit
-3. Ensure both Homepage URL and Authorization callback URL use the same protocol (HTTP or HTTPS)
+1. Verify your GitHub App settings match the webhook URL in your environment configuration
+2. Check that the private key is correctly formatted (should include newlines)
+3. Ensure the Installation ID is correct and the app is installed on your account
+4. Check the webhook delivery logs in GitHub App settings for any errors
 
 #### MongoDB Connection Issues
 
