@@ -47,32 +47,23 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     const checkAuthStatus = async () => {
       try {
         setIsLoading(true);
-
-        const storedToken = localStorage.getItem('github_token');
-        if (storedToken) {
+        const token = localStorage.getItem('github_token');
+        
+        if (token) {
+          // Validate token immediately
+          setIsAuthenticated(true);
+          setGithubAccessToken(token);
+          
+          // Then verify with server
           const response = await fetch('/api/auth/status', {
             credentials: 'include',
-            headers: {
-              Authorization: `Bearer ${storedToken}`,
-            },
+            headers: { Authorization: `Bearer ${token}` },
           });
 
           const data = await response.json();
-          console.log('Auth status:', data);
-
-          if (data.authenticated) {
-            setIsAuthenticated(true);
-            setGithubAccessToken(data.githubAccessToken);
-            setUser({
-              id: data.userId,
-              username: data.username || 'User',
-              githubUsername: data.githubUsername,
-            });
-          } else {
+          if (!data.authenticated) {
             handleLogout();
           }
-        } else {
-          handleLogout();
         }
       } catch (error) {
         console.error('Auth check error:', error);
@@ -82,7 +73,6 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       }
     };
 
-    // Check auth status on mount
     checkAuthStatus();
     
     // Also check when URL changes - this helps refresh auth state after redirect

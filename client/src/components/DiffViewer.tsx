@@ -1,4 +1,7 @@
 import { cn } from "@/lib/utils";
+import { useEffect, useRef, useState } from "react";
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface DiffViewerProps {
   patch: string;
@@ -7,6 +10,48 @@ interface DiffViewerProps {
 }
 
 export const DiffViewer = ({ patch, className, mode = 'unified' }: DiffViewerProps) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [lineNumbers, setLineNumbers] = useState({ oldStart: 1, newStart: 1 });
+
+  // Parse header line for line numbers
+  useEffect(() => {
+    const headerLine = patch.split('\n').find(line => line.startsWith('@@'));
+    if (headerLine) {
+      const match = headerLine.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
+      if (match) {
+        setLineNumbers({
+          oldStart: parseInt(match[1]),
+          newStart: parseInt(match[3])
+        });
+      }
+    }
+  }, [patch]);
+
+  // Get language for syntax highlighting based on file extension
+  const getLanguage = () => {
+    const fileExtMatch = patch.match(/\+\+\+ b\/.*\.([a-z]+)/i);
+    if (fileExtMatch) {
+      const ext = fileExtMatch[1].toLowerCase();
+      const langMap: Record<string, string> = {
+        'ts': 'typescript',
+        'tsx': 'typescript',
+        'js': 'javascript',
+        'jsx': 'javascript',
+        'py': 'python',
+        'java': 'java',
+        'cpp': 'cpp',
+        'c': 'c',
+        'cs': 'csharp',
+        'go': 'go',
+        'rb': 'ruby',
+        'php': 'php',
+        'rs': 'rust',
+      };
+      return langMap[ext] || 'plaintext';
+    }
+    return 'plaintext';
+  };
+
   console.log('DiffViewer render:', { mode, patchLength: patch?.length });
   
   // Parse the patch
@@ -16,69 +61,93 @@ export const DiffViewer = ({ patch, className, mode = 'unified' }: DiffViewerPro
   // Skip the diff headers (first two lines with --- and +++)
   const headerEndIndex = lines.findIndex(line => line.startsWith('@@'));
   const contentLines = headerEndIndex > 0 ? lines.slice(headerEndIndex) : lines;
-  
-  // Filter lines based on mode
-  const displayLines = contentLines.filter(line => {
-    if (mode === 'unified') return true;
-    if (mode === 'original' && !line.startsWith('+')) return true;
-    if (mode === 'modified' && !line.startsWith('-')) return true;
-    return false;
-  }).map(line => {
-    // For non-unified mode, remove the first character (+ or -) for cleaner display
-    if (mode !== 'unified') {
-      if (line.startsWith('+') || line.startsWith('-')) {
-        return line.slice(1);
-      }
-    }
-    return line;
-  });
-
-  // Logging stats for debugging
-  console.log('Display lines:', {
-    total: displayLines.length,
-    additions: contentLines.filter(l => l.startsWith('+')).length,
-    deletions: contentLines.filter(l => l.startsWith('-')).length,
-    other: contentLines.filter(l => !l.startsWith('+') && !l.startsWith('-')).length
-  });
 
   return (
-    <div className={cn("rounded-lg border bg-muted/10", className)}>
-      <div className="overflow-x-auto">
-        <pre className="text-sm font-mono leading-6 p-2 w-full">
-          {displayLines.map((line, idx) => {
-            if (!line && line !== '') return null;
-            
-            const isAddition = line.startsWith('+');
-            const isDeletion = line.startsWith('-');
-            const isHeader = line.startsWith('@@') || line.startsWith('diff');
-            
-            return (
-              <div
-                key={`${mode}-${idx}-${line.slice(0, 20)}`}
-                className={cn(
-                  "whitespace-pre-wrap break-all",
-                  isHeader && "bg-muted/20 text-muted-foreground/60 italic",
-                  isAddition && "bg-emerald-500/10 text-emerald-600",
-                  isDeletion && "bg-red-500/10 text-red-600",
-                )}
-              >
-                {line}
-              </div>
-            );
-          })}
-        </pre>
+    <div className={cn("rounded-lg border bg-[#1E1E1E]", className)}>
+      {/* Single scroll container */}
+      <div ref={containerRef} className="overflow-auto custom-scrollbar">
+        <div className="inline-flex min-w-full">
+          {/* Original code */}
+          <div className="flex-1 border-r border-[#313131]">
+            <div className="sticky top-0 z-10 bg-[#2d2d2d] px-4 py-2 text-sm text-gray-400">
+              Original
+            </div>
+            <div className="p-4">
+              {contentLines.map((line, idx) => {
+                if (line.startsWith('+')) return null;
+                const lineNumber = line.startsWith('-') ? lineNumbers.oldStart + idx : null;
+                return (
+                  <div 
+                    key={`original-${idx}`}
+                    className={cn(
+                      "font-mono text-sm whitespace-pre leading-6",
+                      line.startsWith('-') && "bg-red-950/20 hover:bg-red-950/30"
+                    )}
+                  >
+                    <div className="flex items-start">
+                      <span className="w-12 text-right text-gray-500 pr-4 select-none flex-none">
+                        {lineNumber}
+                      </span>
+                      <SyntaxHighlighter
+                        language={getLanguage()}
+                        style={vscDarkPlus}
+                        customStyle={{
+                          background: 'transparent',
+                          margin: 0,
+                          padding: 0,
+                          display: 'inline',
+                        }}
+                      >
+                        {line.startsWith('-') ? line.slice(1) : line}
+                      </SyntaxHighlighter>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Modified code */}
+          <div className="flex-1">
+            <div className="sticky top-0 z-10 bg-[#2d2d2d] px-4 py-2 text-sm text-gray-400">
+              Modified
+            </div>
+            <div className="p-4">
+              {contentLines.map((line, idx) => {
+                if (line.startsWith('-')) return null;
+                const lineNumber = line.startsWith('+') ? lineNumbers.newStart + idx : null;
+                return (
+                  <div 
+                    key={`modified-${idx}`}
+                    className={cn(
+                      "font-mono text-sm whitespace-pre leading-6",
+                      line.startsWith('+') && "bg-green-950/20 hover:bg-green-950/30"
+                    )}
+                  >
+                    <div className="flex items-start">
+                      <span className="w-12 text-right text-gray-500 pr-4 select-none flex-none">
+                        {lineNumber}
+                      </span>
+                      <SyntaxHighlighter
+                        language={getLanguage()}
+                        style={vscDarkPlus}
+                        customStyle={{
+                          background: 'transparent',
+                          margin: 0,
+                          padding: 0,
+                          display: 'inline',
+                        }}
+                      >
+                        {line.startsWith('+') ? line.slice(1) : line}
+                      </SyntaxHighlighter>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
 };
-
-function getLineNumbers(patch: string): [number, number] {
-  const match = patch.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/);
-  console.log('Patch header match:', match);
-  return match ? [parseInt(match[1]), parseInt(match[2])] : [1, 1];
-}
-function getLineNumber(idx: number, isAdd: boolean, isDel: boolean, oldStart: number, newStart: number): number {
-  if (isAdd) return newStart++;
-  if (isDel) return oldStart++;
-  return isDel ? oldStart++ : newStart++;
-}

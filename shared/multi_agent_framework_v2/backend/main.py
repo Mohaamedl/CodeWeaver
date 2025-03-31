@@ -1,11 +1,15 @@
 from typing import Any, Dict, List, Optional
-
+import os
+import tempfile
+from backend.agents.architecture_assistant import ArchitectureAssistant
+from backend.chat_memory import ChatMemory  # Add this import
 from backend.db.database import SessionLocal
 from backend.db.models import ReviewSession, Suggestion
 from backend.orchestrator import AgentOrchestrator, apply_patch_to_file
 from backend.services.github import GitHubAPI
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import (FastAPI, HTTPException, Query, WebSocket,
+                     WebSocketDisconnect)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel as BaseModelV2
 from pydantic import ConfigDict
@@ -43,6 +47,7 @@ class ReviewSuggestion(BaseModelV2):
 class ReviewResponse(BaseModelV2):
     session_id: int
     suggestions: List[ReviewSuggestion]
+    files: List[Dict[str, Any]]  # Add files to response
 
 class ApplyPatchRequest(BaseModelV2):
     suggestion_id: int
@@ -71,6 +76,16 @@ class CreatePRResponse(BaseModelV2):
     pr_url: str
     status: str
 
+class ArchitectureAnalysisRequest(BaseModelV2):
+    query: Optional[str] = None
+    structure: Dict[str, Any]
+    files: List[Dict[str, Any]]
+
+class ArchitectureAnalysisResponse(BaseModelV2):
+    suggestions: str
+    type: str
+    focus: str
+
 app = FastAPI(title="Code Review Assistant API")
 
 app.add_middleware(
@@ -80,6 +95,52 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add WebSocket connection manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+        self.assistant = ArchitectureAssistant()
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def handle_message(self, websocket: WebSocket, data: Dict[str, Any]):
+        chat_memory = ChatMemory()
+        if data.get('type') == 'init':
+            result = await self.assistant.analyze_structure(
+                chat_memory=chat_memory,
+                structure=data.get('structure', {}),
+                files=data.get('files', [])
+            )
+        elif data.get('type') == 'query':
+            result = await self.assistant.analyze_structure(
+                chat_memory=chat_memory,
+                structure=self.assistant.last_structure or {},
+                files=data.get('files', []),
+                query=data.get('query')
+            )
+        await websocket.send_json(result)
+
+manager = ConnectionManager()
+
+# Add WebSocket endpoint
+@app.websocket("/ws/architect")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_json()
+            await manager.handle_message(websocket, data)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket error: {str(e)}")
+        await websocket.close()
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate_code(req: GenerateRequest):
@@ -117,9 +178,12 @@ async def review_code(req: ReviewRequest) -> ReviewResponse:
             ) for s in suggestions
         ]
         
+        files = None  # Fetch files if needed
+        
         return ReviewResponse(
             session_id=session.id,
-            suggestions=formatted_suggestions
+            suggestions=formatted_suggestions,
+            files=files if files else []  # Include files in response
         )
         
     except Exception as e:
@@ -159,9 +223,6 @@ async def apply_patch(req: ApplyPatchRequest):
             raise HTTPException(status_code=404, detail=f"File {suggestion.file_path} not found")
 
         # Apply the patch using a temporary file
-        import tempfile
-        import os
-
         # Create temporary files for the patch process
         with tempfile.NamedTemporaryFile(mode='w', delete=False) as original_file, \
              tempfile.NamedTemporaryFile(mode='w', delete=False) as patch_file:
@@ -359,3 +420,22 @@ async def create_pr(req: CreatePRRequest):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
+@app.post("/architecture/analyze", response_model=ArchitectureAnalysisResponse)
+async def analyze_architecture(req: ArchitectureAnalysisRequest):
+    """Get AI suggestions for architecture improvements."""
+    try:
+        assistant = ArchitectureAssistant()
+        chat_memory = ChatMemory()  # You might want to persist this
+        
+        result = await assistant.analyze_structure(
+            chat_memory=chat_memory,
+            structure=req.structure,
+            files=req.files,
+            query=req.query
+        )
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error in architecture analysis: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
