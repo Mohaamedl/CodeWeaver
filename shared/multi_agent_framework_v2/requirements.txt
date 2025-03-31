@@ -1,0 +1,11 @@
+fastapi==0.109.0
+pydantic==2.7.4
+starlette>=0.35.0
+uvicorn==0.23.2
+typer==0.9.0
+SQLAlchemy==1.4.47
+alembic==1.10.4
+openai==0.27.0
+gitpython==3.1.31
+python-dotenv==1.0.0
+uvicorn==0.23.2
