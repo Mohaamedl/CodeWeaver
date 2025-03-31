@@ -74,11 +74,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GitHub OAuth initiation route
   app.get("/api/auth/github", (req, res) => {
     const clientId = process.env.GITHUB_CLIENT_ID;
-    // Use APP_BASE_URL for the callback URL to match GitHub OAuth settings
     const redirectUri = `${process.env.APP_BASE_URL}/api/auth/github/callback`;
-    const scope = "repo,user";
-    
-    res.redirect(`https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=${scope}`);
+    const scopes = "read:user user:email repo";
+
+    res.redirect(`https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes)}&prompt=consent`);
   });
 
   // Logout route
@@ -108,6 +107,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/github/branches", githubController.listBranches);
   app.post("/api/github/create-branch", githubController.createBranch);
   app.post("/api/github/create-pr", githubController.createPullRequest);
+  app.post("/api/github/apply-patch", githubController.applyPatch);
 
   const httpServer = createServer(app);
 
