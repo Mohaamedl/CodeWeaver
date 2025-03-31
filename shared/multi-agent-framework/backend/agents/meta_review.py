@@ -55,6 +55,21 @@ class MetaReviewAgent(BaseAgent):
                     example_deps += ', etc.'
                 parts.append(f"Dependency suggestions include updating packages (e.g. {example_deps})")
         
+        # ArchAgent
+        if "ArchAgent" in agent_categories:
+            arch_msgs = [s.message for s in suggestions_list if s.agent == "ArchAgent"]
+            arch_issues = []
+            if any("god object" in msg.lower() for msg in arch_msgs):
+                arch_issues.append("splitting up 'god' classes/modules into smaller components")
+            if any("circular" in msg.lower() for msg in arch_msgs):
+                arch_issues.append("resolving circular dependencies among modules")
+            if arch_issues:
+                parts.append(f"Architecture improvements include {', '.join(arch_issues)}")
+            else:
+                # fallback: just add raw ArchAgent messages
+                for msg in arch_msgs:
+                    parts.append(f"Architectural note: {msg}")
+            
         # General issues (LLMReviewAgent)
         if 'LLMReviewAgent' in agent_categories:
             general_msgs = [s['message'] for s in suggestions_list if s['agent'] == 'LLMReviewAgent']

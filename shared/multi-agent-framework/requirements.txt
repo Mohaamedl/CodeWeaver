@@ -9,3 +9,8 @@ openai==0.27.0
 gitpython==3.1.31
 python-dotenv==1.0.0
 uvicorn==0.23.2
+radon==6.0.1
+bandit==1.8.3
+pylint==3.3.6
+flake8==7.1.2
+mypy==1.15.0

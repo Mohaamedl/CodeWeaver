@@ -17,6 +17,17 @@ from backend.db.models import ReviewSession, Suggestion
 from backend.services.github import GitHubAPI
 
 logger = logging.getLogger(__name__)
+import asyncio
+from backend.db.database import SessionLocal
+from backend.db.models import ReviewSession, Suggestion
+from backend.agents.arch_agent import ArchAgent
+from backend.agents.coder import CoderAgent
+from backend.agents.llm_review import LLMReviewAgent
+from backend.agents.refactoring import RefactoringAgent
+from backend.agents.linting import LintingAgent
+from backend.agents.dependency import DependencyAgent
+from backend.agents.meta_review import MetaReviewAgent
+from backend.chat_memory import ChatMemory
 
 class AgentOrchestrator:
     def __init__(self):
@@ -25,7 +36,8 @@ class AgentOrchestrator:
             LintingAgent(),
             RefactoringAgent(),
             DependencyAgent(),
-            LLMReviewAgent()
+            LLMReviewAgent(),
+            ArchAgent()
         ]
         self.agent_stats = {}
         logger.info(f"Initialized {len(self.agents)} agents")
@@ -57,6 +69,41 @@ class AgentOrchestrator:
                 summary=""  # Initialize with empty summary
             )
             db.add(session)
+            session_obj = ReviewSession(repo_path=repo_path)
+            db.add(session_obj)
+            # Instantiate shared chat memory and infer preferences
+            chat_memory = ChatMemory()
+            chat_memory.infer_preferences(repo_path)
+            suggestions_all = []
+            # Run each agent and collect suggestions
+            for agent in self.review_agents:
+                try:
+                    if asyncio.iscoroutinefunction(agent.run):
+                        agent_suggestions = asyncio.run(agent.run(repo_path, chat_memory))
+                    else:
+                        agent_suggestions = agent.run(repo_path, chat_memory)
+                except Exception as e:
+                    # If an agent fails, skip it
+                    print(f"Agent {agent.__class__.__name__} failed: {e}")
+                    agent_suggestions = []
+                for sugg in agent_suggestions:
+                    # sugg is expected to be a dict with keys 'message', 'patch', 'file_path'
+                    suggestion_model = Suggestion(
+                        session=session_obj,
+                        agent=agent.__class__.__name__,
+                        message=sugg.get('message', ''),
+                        patch=sugg.get('patch'),
+                        file_path=sugg.get('file_path'),
+                        status='pending'
+                    )
+                    db.add(suggestion_model)
+                    suggestions_all.append(suggestion_model)
+            # Flush to assign IDs to session and suggestions
+            db.flush()
+            # Run meta review agent to generate summary
+            summary_text = self.meta_agent.run(suggestions_all, chat_memory)
+            session_obj.summary = summary_text
+            # Commit all changes
             db.commit()
             db.refresh(session)
             

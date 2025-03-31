@@ -134,4 +134,27 @@ class RefactoringAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         """Legacy method for local repository analysis."""
         return await self.run(chat_memory, repo_path=repo_path, structure=structure)
+    def _generate_patch(self, file_text, original_lines, lineno, col_offset, end_lineno, end_col_offset, new_code, rel_path):
+        """Generate unified diff patch for replacing text from (lineno,col_offset) to (end_lineno,end_col_offset) with new_code."""
+        start_index = sum(len(line) for line in original_lines[:lineno - 1]) + col_offset
+        end_index = sum(len(line) for line in original_lines[:end_lineno - 1]) + end_col_offset
+        new_file_text = file_text[:start_index] + new_code + file_text[end_index:]
+
+        original_lines = file_text.splitlines(keepends=True)
+        new_lines = new_file_text.splitlines(keepends=True)
+
+        diff_lines = list(difflib.unified_diff(
+            original_lines,
+            new_lines,
+            fromfile=f"a/{rel_path}",
+            tofile=f"b/{rel_path}",
+            lineterm=''  # important: don't append extra newlines
+        ))
+
+        print("=== DIFF LINES ===")
+        for line in diff_lines:
+            print(repr(line))
+
+        patch = '\n'.join(diff_lines) + '\n'
+        return patch if patch else None
 
