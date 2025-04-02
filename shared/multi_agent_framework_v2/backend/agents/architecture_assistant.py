@@ -2,8 +2,9 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from backend.agents.base import BaseAgent
 from backend.chat_memory import ChatMemory
+
+from backend.agents.base import BaseAgent
 
 logger = logging.getLogger(__name__)
 
@@ -180,48 +181,64 @@ Files Overview:
         }
 
     def _format_structure(self, structure: Dict[str, Any]) -> str:
-        """Format project structure focusing only on names and hierarchy."""
+        """Format project structure with accurate stats and minimal tokens."""
         formatted_tree = []
+        stats = {
+            'files': 0,
+            'dirs': 0,
+            'by_type': {},
+            'by_dir': {}
+        }
         
         def format_node(node: Dict[str, Any], prefix: str = "", is_last: bool = True) -> None:
-            # Get basic node info
             name = node.get("path", "") or node.get("name", "")
             node_type = node.get("type", "")
             
-            # Skip if no name
             if not name:
                 return
-                
-            # Create the line prefix
-            line_prefix = prefix + ("└── " if is_last else "├── ")
             
-            # Add the node to the tree (just name, no metadata)
+            # Update stats
+            if node_type == "directory":
+                stats['dirs'] += 1
+                dir_name = name.split('/')[0]
+                stats['by_dir'][dir_name] = stats['by_dir'].get(dir_name, 0) + 1
+            else:
+                stats['files'] += 1
+                ext = name.split('.')[-1] if '.' in name else 'no_ext'
+                stats['by_type'][ext] = stats['by_type'].get(ext, 0) + 1
+            
+            # Format tree line
+            line_prefix = prefix + ("+" if is_last else "|") + "-- "
             formatted_tree.append(f"{line_prefix}{name}")
             
-            # Process children if it's a directory
+            # Process children
             if node_type == "directory" and "children" in node:
                 children = node["children"]
                 for i, child in enumerate(children):
                     is_last_child = i == len(children) - 1
-                    child_prefix = prefix + ("    " if is_last else "│   ")
+                    child_prefix = prefix + ("    " if is_last else "|   ")
                     format_node(child, child_prefix, is_last_child)
 
-        # Start formatting from root
+        # Process root
         if isinstance(structure, dict):
             if "children" in structure:
-                # If root has children, process them
-                children = structure["children"]
-                for i, child in enumerate(children):
-                    format_node(child, "", i == len(children) - 1)
+                for i, child in enumerate(structure["children"]):
+                    format_node(child, "", i == len(structure["children"]) - 1)
             else:
-                # Single node
                 format_node(structure)
         elif isinstance(structure, list):
-            # If root is a list, process each item
             for i, item in enumerate(structure):
                 format_node(item, "", i == len(structure) - 1)
 
-        return "\n".join(formatted_tree)
+        # Create header with accurate stats
+        header = [
+            "Project Structure:",
+            f"Total: {stats['files'] + stats['dirs']} items ({stats['files']} files, {stats['dirs']} directories)",
+            f"File types: {', '.join(f'{ext}: {count}' for ext, count in sorted(stats['by_type'].items()) if ext in ['ts', 'tsx', 'js', 'py'])}",
+            "---"
+        ]
+
+        return "\n".join(header + formatted_tree)
 
     def _format_files_summary(self, files: List[Dict[str, Any]]) -> str:
         """Create a simplified summary of key files."""

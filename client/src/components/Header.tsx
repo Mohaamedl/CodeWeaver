@@ -34,12 +34,14 @@ const Header = () => {
         <div className="flex justify-between h-16">
           <div className="flex">
             <div className="flex-shrink-0 flex items-center">
+              <Link rel="" href="/">
               <svg className="h-8 w-8 text-primary dark:text-primary-foreground" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                 <path d="M2 17L12 22L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                 <path d="M2 12L12 17L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
               <span className="ml-2 text-xl font-semibold text-gray-900 dark:text-white">CodeWeaver</span>
+              </Link>
             </div>
             
             {/* Desktop Navigation */}
@@ -59,7 +61,7 @@ const Header = () => {
               </Link>
               <Link href="/assistant">
                 <span className={`${location === '/assistant' ? 'border-primary text-primary dark:text-primary-foreground' : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-300 dark:hover:text-gray-100'} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium cursor-pointer`}>
-                  Assistant
+                  AI Architect
                 </span>
               </Link>
             </nav>
