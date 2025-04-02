@@ -58,6 +58,25 @@ shared/multi_agent_framework_v2/repositories
 .env.production
 .env.*.local
 
+# Environment and Virtual Environments - All locations
+.env
+.venv/
+venv/
+ENV/
+env/
+.Python
+pyvenv.cfg
+shared/multi-agent-framework/.env
+shared/multi-agent-framework/.venv/
+shared/multi_agent_framework_v2/.env
+shared/multi_agent_framework_v2/.venv/
+
+# Project specific environment files
+**/multi-agent-framework/**/.env
+**/multi_agent_framework_v2/**/.env
+**/multi-agent-framework/**/.venv/
+**/multi_agent_framework_v2/**/.venv/
+
 # Database
 *.db
 *.sqlite
