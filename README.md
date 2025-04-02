@@ -127,12 +127,44 @@ MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/codeweaver?retryWr
 
 ### Development
 
+You'll need to run three components in separate terminals:
+
 ```bash
-# Start development server
+# Terminal 1: Start the main application server
 npm run dev
+
+# Terminal 2: Navigate to the multi-agent framework directory and start the backend
+cd shared/multi_agent_framework_v2
+uvicorn backend.main:app --reload --port 8000
+
 ```
 
-This will start the server on http://localhost:5000 with both the backend API and frontend application.
+The application will be available at:
+- Main application: http://localhost:5000
+- Multi-agent backend: http://localhost:8000
+
+
+### Multi-Agent Framework
+
+The multi-agent system provides intelligent code analysis through several specialized agents:
+
+- **LintingAgent**: Analyzes code style and best practices
+- **RefactoringAgent**: Suggests code structure improvements
+- **DependencyAgent**: Manages package dependencies and security
+- **LLMReviewAgent**: Provides high-level architectural insights
+- **MetaReviewAgent**: Validates and prioritizes suggestions
+
+### Prerequisites for Multi-Agent System
+
+```bash
+# Install Python dependencies for the multi-agent framework
+cd shared/multi_agent_framework_2
+pip install -r requirements.txt
+
+# Configure environment variables
+cp .env.example .env
+# Edit .env with your OpenAI API key and other settings
+```
 
 ### Production
 
