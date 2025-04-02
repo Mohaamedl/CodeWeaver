@@ -1,0 +1,22 @@
+@layer components {
+  .diff-header {
+    @apply bg-muted/50 text-muted-foreground;
+  }
+  
+  .diff-addition {
+    @apply bg-green-500/10 text-green-600;
+  }
+  
+  .diff-deletion {
+    @apply bg-red-500/10 text-red-600;
+  }
+}
+
+/* Diff viewer colors */
+.diff-line-deletion {
+  @apply bg-[#4B1113] hover:bg-[#550F0F] text-[#FF9999];
+}
+
+.diff-line-addition {
+  @apply bg-[#133B1D] hover:bg-[#1E4B2C] text-[#A3D6AD];
+}

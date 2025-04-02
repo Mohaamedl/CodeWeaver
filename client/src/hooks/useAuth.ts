@@ -1,8 +1,7 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/queryClient';
-import React from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
 type User = {
   id: number;
@@ -14,6 +13,7 @@ type AuthContextType = {
   isAuthenticated: boolean;
   user: User | null;
   isLoading: boolean;
+  githubAccessToken: string | null;
   login: () => void;
   logout: () => void;
 };
@@ -22,6 +22,7 @@ const AuthContext = createContext<AuthContextType>({
   isAuthenticated: false,
   user: null,
   isLoading: true,
+  githubAccessToken: null,
   login: () => {},
   logout: () => {},
 });
@@ -30,35 +31,48 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [githubAccessToken, setGithubAccessToken] = useState<string | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   useEffect(() => {
+    const handleLogout = () => {
+      setIsAuthenticated(false);
+      setUser(null);
+      setGithubAccessToken(null);
+      localStorage.removeItem('github_token');
+      localStorage.removeItem('userId');
+    };
+
     const checkAuthStatus = async () => {
       try {
         setIsLoading(true);
-        const response = await fetch('/api/auth/status', {
-          credentials: 'include',
-        });
+        const token = localStorage.getItem('github_token');
         
-        const data = await response.json();
-        setIsAuthenticated(data.authenticated);
-        
-        if (data.authenticated && data.userId) {
-          setUser({
-            id: data.userId,
-            username: data.username || 'User',
-            githubUsername: data.githubUsername,
+        if (token) {
+          // Validate token immediately
+          setIsAuthenticated(true);
+          setGithubAccessToken(token);
+          
+          // Then verify with server
+          const response = await fetch('/api/auth/status', {
+            credentials: 'include',
+            headers: { Authorization: `Bearer ${token}` },
           });
+
+          const data = await response.json();
+          if (!data.authenticated) {
+            handleLogout();
+          }
         }
       } catch (error) {
-        console.error('Error checking auth status:', error);
+        console.error('Auth check error:', error);
+        handleLogout();
       } finally {
         setIsLoading(false);
       }
     };
-    
-    // Check auth status on mount
+
     checkAuthStatus();
     
     // Also check when URL changes - this helps refresh auth state after redirect
@@ -72,6 +86,30 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     };
   }, []);
 
+  const handleGitHubCallback = async (code: string) => {
+    try {
+      const response = await fetch('/api/auth/github/callback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+      });
+      
+      const data = await response.json();
+      if (data.accessToken) {
+        localStorage.setItem('github_token', data.accessToken);
+        setIsAuthenticated(true);
+        setGithubAccessToken(data.accessToken);
+        setUser({
+          id: data.userId,
+          username: data.username || 'User',
+          githubUsername: data.githubUsername,
+        });
+      }
+    } catch (error) {
+      console.error('GitHub authentication error:', error);
+    }
+  };
+
   const login = () => {
     window.location.href = '/api/auth/github';
   };
@@ -81,6 +119,7 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       await apiRequest('POST', '/api/auth/logout');
       setIsAuthenticated(false);
       setUser(null);
+      setGithubAccessToken(null);
       queryClient.clear();
       toast({
         title: 'Logged out',
@@ -98,7 +137,7 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
   return React.createElement(
     AuthContext.Provider,
-    { value: { isAuthenticated, user, isLoading, login, logout } },
+    { value: { isAuthenticated, user, isLoading, githubAccessToken, login, logout } },
     children
   );
 };

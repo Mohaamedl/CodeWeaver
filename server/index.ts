@@ -116,16 +116,15 @@ app.use((req, res, next) => {
   // ALWAYS serve the app on port 5000 in Replit
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  // NOTE: GitHub OAuth is configured to use http://localhost:3000 for the callback URL
   // Make sure your GitHub OAuth app settings match APP_BASE_URL in .env
-  const port = 5000;
+  const port = process.env.PORT;
   server.listen({
     port,
     host: "0.0.0.0",
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
-    log(`GitHub OAuth is configured to use: ${process.env.APP_BASE_URL || 'http://localhost:3000'}`);
+    log(`GitHub OAuth is configured to use: ${process.env.APP_BASE_URL }`);
     log(`Make sure your GitHub OAuth app settings match this URL for the callback`);
     
     // Log storage mode
