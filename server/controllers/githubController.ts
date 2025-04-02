@@ -179,42 +179,169 @@ export class GitHubController {
   }
 
   /**
-   * Get repository path
+   * Analyze repository before cloning
    */
-  async getRepositoryPath(req: Request, res: Response) {
+  private async analyzeRepositoryMetadata(owner: string, repo: string, accessToken: string) {
     try {
-      const { owner, repo } = req.params;
-      const repoPath = path.join(process.cwd(), 'repositories', owner, repo);
+      // Get repository metadata first
+      const repoMetadata = await githubService.getRepositoryMetadata(accessToken, owner, repo);
       
-      // Ensure repository is cloned first
-      if (!fs.existsSync(repoPath)) {
-        await this.cloneRepository(owner, repo);
+      // Check if repository is too large (e.g., > 100MB)
+      if (repoMetadata.size > 100000) { // size is in KB
+        return {
+          shouldClone: false,
+          reason: 'Repository is too large',
+          metadata: repoMetadata
+        };
       }
-      res.json({ path: repoPath });
+
+      // Check if repository has too many files
+      const tree = await githubService.getRepositoryTree(accessToken, owner, repo);
+      if (tree.tree.length > 1000) {
+        return {
+          shouldClone: false,
+          reason: 'Repository has too many files',
+          metadata: repoMetadata
+        };
+      }
+
+      // Check primary language
+      const languages = await githubService.getRepositoryLanguages(accessToken, owner, repo);
+      const supportedLanguages = ['JavaScript', 'TypeScript', 'Python'];
+      const primaryLanguage = Object.entries(languages).sort((a, b) => b[1] - a[1])[0]?.[0];
+      
+      if (!supportedLanguages.includes(primaryLanguage)) {
+        return {
+          shouldClone: false,
+          reason: 'Primary language not supported',
+          metadata: repoMetadata
+        };
+      }
+
+      return {
+        shouldClone: true,
+        metadata: repoMetadata,
+        primaryLanguage
+      };
     } catch (error) {
-      console.error('Error getting repository path:', error);
-      res.status(500).json({ error: 'Failed to get repository path' });
+      console.error('Error analyzing repository metadata:', error);
+      throw error;
     }
   }
 
   /**
-   * Clone repository to local storage
+   * Get repository path with smart cloning
    */
-  async cloneRepository(owner: string, repo: string): Promise<string> {
+  async getRepositoryPath(req: Request, res: Response) {
+    try {
+      const { owner, repo } = req.params;
+      const accessToken = this.getGitHubToken(req);
+      if (!accessToken) {
+        return res.status(401).json({ message: 'GitHub authentication required' });
+      }
+
+      // First analyze the repository
+      const analysis = await githubService.analyzeRepository(accessToken, owner, repo);
+      
+      // Return early if repository is too large/complex
+      if (analysis.metadata.fileCount > 5000 || analysis.metadata.size > 100000) {
+        return res.status(400).json({
+          message: 'Repository too large to analyze',
+          analysis
+        });
+      }
+
+      // Return status update with analysis
+      const repoPath = path.join(process.cwd(), 'repositories', owner, repo);
+      
+      if (analysis.shouldClone) {
+        // Check if already cloned
+        if (!fs.existsSync(repoPath)) {
+          await this.cloneRepository(owner, repo);
+        } else {
+          // Update existing clone
+          const git = simpleGit(repoPath);
+          await git.pull();
+        }
+
+        return res.json({
+          path: repoPath,
+          cloned: true,
+          analysis
+        });
+      }
+
+      // If not cloning, return analysis for API-based processing
+      return res.json({
+        cloned: false,
+        analysis,
+        apiPath: `${owner}/${repo}`
+      });
+
+    } catch (error) {
+      console.error('Error analyzing repository:', error);
+      return res.status(500).json({ error: 'Failed to analyze repository' });
+    }
+  }
+
+  /**
+   * Get repository data with analysis
+   */
+  async getRepositoryData(req: Request, res: Response) {
+    try {
+      const { owner, repo } = req.params;
+      const accessToken = this.getGitHubToken(req);
+      if (!accessToken) {
+        return res.status(401).json({ message: 'GitHub authentication required' });
+      }
+
+      // First analyze the repository
+      const analysis = await githubService.analyzeRepository(accessToken, owner, repo);
+      
+      if (analysis.shouldClone) {
+        // Use cloning approach
+        const repoPath = path.join(process.cwd(), 'repositories', owner, repo);
+        await this.cloneRepository(owner, repo);
+        return res.json({
+          method: 'clone',
+          path: repoPath,
+          analysis
+        });
+      } else {
+        // Use API approach
+        const files = await githubService.getRepositoryContents(accessToken, owner, repo);
+        return res.json({
+          method: 'api',
+          files,
+          analysis
+        });
+      }
+    } catch (error) {
+      console.error('Error analyzing repository:', error);
+      return res.status(500).json({ error: 'Failed to analyze repository' });
+    }
+  }
+
+  /**
+   * Optimize repository cloning
+   */
+  private async cloneRepository(owner: string, repo: string): Promise<string> {
     const repoPath = path.join(process.cwd(), "repositories", owner, repo);
-    // Create directories if they don't exist
     await fs.promises.mkdir(path.dirname(repoPath), { recursive: true });
 
-    // Clone or update repository
+    const git = simpleGit();
     if (await fs.promises.access(repoPath).then(() => true).catch(() => false)) {
-      // Pull latest changes if repo exists
-      const git = simpleGit(repoPath);
-      await git.pull();
+      // Update existing clone
+      await git.cwd(repoPath).pull(['--depth', '1', '--no-tags']);
     } else {
-      // Clone if repo doesn't exist
-      const repoUrl = `https://github.com/${owner}/${repo}.git`;
-      await simpleGit().clone(repoUrl, repoPath);
+      // Shallow clone for efficiency
+      await git.clone(`https://github.com/${owner}/${repo}.git`, repoPath, [
+        '--depth', '1',
+        '--no-tags',
+        '--no-single-branch'
+      ]);
     }
+
     return repoPath;
   }
 
@@ -373,6 +500,7 @@ export class GitHubController {
         return res.status(400).json({ message: 'Missing required parameters' });
       }
 
+      // Get the suggestion from database
       const db = SessionLocal();
       try {
         const suggestion = await db.query(Suggestion).get(suggestionId);
@@ -381,28 +509,30 @@ export class GitHubController {
         }
 
         const branchName = `fix/${suggestionId}`;
-        console.log('Creating PR with token:', accessToken);
 
-        // Try to get the branch first
-        const branchExists = await githubService.checkBranchExists(
-          accessToken, 
-          owner, 
-          repo, 
+        // Apenas use a API do GitHub - remova a lógica de clonagem
+        const github = new GitHubService();
+
+        // Verifique se o branch existe
+        const branchExists = await github.checkBranchExists(
+          accessToken,
+          owner,
+          repo,
           branchName
         );
 
-        // Only create branch if it doesn't exist
+        // Crie o branch se não existir
         if (!branchExists) {
-          await githubService.createBranch(accessToken, owner, repo, baseBranch, branchName);
+          await github.createBranch(accessToken, owner, repo, baseBranch, branchName);
         }
 
-        // Apply changes to the branch regardless of whether it's new or existing
+        // Aplique as mudanças via API
         const filePath = suggestion.file_path;
-        const currentContent = await githubService.getFileContents(accessToken, owner, repo, filePath);
-        const patchedContent = await githubService.applyPatchToContent(currentContent, suggestion.patch);
+        const currentContent = await github.getFileContents(accessToken, owner, repo, filePath);
+        const patchedContent = await github.applyPatchToContent(currentContent, suggestion.patch);
 
-        // Update the file in the branch
-        await githubService.updateFile(
+        // Atualize o arquivo no branch
+        await github.updateFile(
           accessToken,
           owner,
           repo,
@@ -412,8 +542,8 @@ export class GitHubController {
           branchName
         );
 
-        // Create or get existing PR
-        const pr = await githubService.createPullRequest(
+        // Crie ou obtenha PR existente
+        const pr = await github.createPullRequest(
           accessToken,
           owner,
           repo,

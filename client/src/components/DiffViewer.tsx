@@ -1,151 +1,127 @@
 import { cn } from "@/lib/utils";
-import { useEffect, useRef, useState } from "react";
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { useEffect, useState } from "react";
 
 interface DiffViewerProps {
   patch: string;
   className?: string;
-  mode?: 'original' | 'modified' | 'unified';
 }
 
-export const DiffViewer = ({ patch, className, mode = 'unified' }: DiffViewerProps) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [lineNumbers, setLineNumbers] = useState({ oldStart: 1, newStart: 1 });
+interface DiffHunk {
+  header: string;
+  oldStart: number;
+  oldLines: { content: string; type: 'unchanged' | 'deleted' }[];
+  newStart: number;
+  newLines: { content: string; type: 'unchanged' | 'added' }[];
+}
 
-  // Parse header line for line numbers
+export const DiffViewer = ({ patch, className }: DiffViewerProps) => {
+  const [hunks, setHunks] = useState<DiffHunk[]>([]);
+
+  // Parse diff into hunks
   useEffect(() => {
-    const headerLine = patch.split('\n').find(line => line.startsWith('@@'));
-    if (headerLine) {
-      const match = headerLine.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
-      if (match) {
-        setLineNumbers({
-          oldStart: parseInt(match[1]),
-          newStart: parseInt(match[3])
-        });
+    if (!patch) return;
+
+    const lines = patch.split('\n');
+    const parsedHunks: DiffHunk[] = [];
+    let currentHunk: DiffHunk | null = null;
+
+    for (const line of lines) {
+      // Parse hunk header
+      if (line.startsWith('@@')) {
+        const match = line.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
+        if (match) {
+          if (currentHunk) parsedHunks.push(currentHunk);
+          currentHunk = {
+            header: line,
+            oldStart: parseInt(match[1]),
+            oldLines: [],
+            newStart: parseInt(match[3]),
+            newLines: []
+          };
+        }
+        continue;
+      }
+
+      if (!currentHunk) continue;
+
+      // Skip file headers
+      if (line.startsWith('---') || line.startsWith('+++')) continue;
+
+      // Parse content lines
+      if (line.startsWith('-')) {
+        currentHunk.oldLines.push({ content: line.slice(1), type: 'deleted' });
+      } else if (line.startsWith('+')) {
+        currentHunk.newLines.push({ content: line.slice(1), type: 'added' });
+      } else if (line.startsWith(' ')) {
+        const content = line.slice(1);
+        currentHunk.oldLines.push({ content, type: 'unchanged' });
+        currentHunk.newLines.push({ content, type: 'unchanged' });
       }
     }
+
+    if (currentHunk) parsedHunks.push(currentHunk);
+    setHunks(parsedHunks);
   }, [patch]);
 
-  // Get language for syntax highlighting based on file extension
-  const getLanguage = () => {
-    const fileExtMatch = patch.match(/\+\+\+ b\/.*\.([a-z]+)/i);
-    if (fileExtMatch) {
-      const ext = fileExtMatch[1].toLowerCase();
-      const langMap: Record<string, string> = {
-        'ts': 'typescript',
-        'tsx': 'typescript',
-        'js': 'javascript',
-        'jsx': 'javascript',
-        'py': 'python',
-        'java': 'java',
-        'cpp': 'cpp',
-        'c': 'c',
-        'cs': 'csharp',
-        'go': 'go',
-        'rb': 'ruby',
-        'php': 'php',
-        'rs': 'rust',
-      };
-      return langMap[ext] || 'plaintext';
-    }
-    return 'plaintext';
-  };
-
-  console.log('DiffViewer render:', { mode, patchLength: patch?.length });
-  
-  // Parse the patch
-  const lines = patch.split('\n');
-  console.log('Parsed lines:', lines.length);
-  
-  // Skip the diff headers (first two lines with --- and +++)
-  const headerEndIndex = lines.findIndex(line => line.startsWith('@@'));
-  const contentLines = headerEndIndex > 0 ? lines.slice(headerEndIndex) : lines;
-
   return (
-    <div className={cn("rounded-lg border bg-[#1E1E1E]", className)}>
-      {/* Single scroll container */}
-      <div ref={containerRef} className="overflow-auto custom-scrollbar">
-        <div className="inline-flex min-w-full">
-          {/* Original code */}
-          <div className="flex-1 border-r border-[#313131]">
-            <div className="sticky top-0 z-10 bg-[#2d2d2d] px-4 py-2 text-sm text-gray-400">
-              Original
-            </div>
-            <div className="p-4">
-              {contentLines.map((line, idx) => {
-                if (line.startsWith('+')) return null;
-                const lineNumber = line.startsWith('-') ? lineNumbers.oldStart + idx : null;
-                return (
-                  <div 
-                    key={`original-${idx}`}
+    <div className={cn("grid grid-cols-2 gap-4 rounded-lg border bg-[#1E1E1E]", className)}>
+      {/* Original Code */}
+      <div className="border-r border-[#313131]">
+        <div className="sticky top-0 z-10 bg-[#2d2d2d] px-4 py-2 text-sm text-gray-400">
+          Original
+        </div>
+        <div className="overflow-auto">
+          <pre className="p-4 font-mono text-sm">
+            {hunks.map((hunk, i) => (
+              <div key={`old-${i}`}>
+                <div className="text-xs text-gray-500 mb-2">{hunk.header}</div>
+                {hunk.oldLines.map((line, j) => (
+                  <div
+                    key={`old-${i}-${j}`}
                     className={cn(
-                      "font-mono text-sm whitespace-pre leading-6",
-                      line.startsWith('-') && "bg-red-950/20 hover:bg-red-950/30"
+                      "flex",
+                      line.type === 'deleted' && "bg-red-950/20 text-red-400"
                     )}
                   >
-                    <div className="flex items-start">
-                      <span className="w-12 text-right text-gray-500 pr-4 select-none flex-none">
-                        {lineNumber}
-                      </span>
-                      <SyntaxHighlighter
-                        language={getLanguage()}
-                        style={vscDarkPlus}
-                        customStyle={{
-                          background: 'transparent',
-                          margin: 0,
-                          padding: 0,
-                          display: 'inline',
-                        }}
-                      >
-                        {line.startsWith('-') ? line.slice(1) : line}
-                      </SyntaxHighlighter>
-                    </div>
+                    <span className="w-12 text-right text-gray-500 pr-4 select-none">
+                      {hunk.oldStart + j}
+                    </span>
+                    <span className="flex-1">{line.content}</span>
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                ))}
+              </div>
+            ))}
+          </pre>
+        </div>
+      </div>
 
-          {/* Modified code */}
-          <div className="flex-1">
-            <div className="sticky top-0 z-10 bg-[#2d2d2d] px-4 py-2 text-sm text-gray-400">
-              Modified
-            </div>
-            <div className="p-4">
-              {contentLines.map((line, idx) => {
-                if (line.startsWith('-')) return null;
-                const lineNumber = line.startsWith('+') ? lineNumbers.newStart + idx : null;
-                return (
-                  <div 
-                    key={`modified-${idx}`}
+      {/* Modified Code */}
+      <div>
+        <div className="sticky top-0 z-10 bg-[#2d2d2d] px-4 py-2 text-sm text-gray-400">
+          Modified
+        </div>
+        <div className="overflow-auto">
+          <pre className="p-4 font-mono text-sm">
+            {hunks.map((hunk, i) => (
+              <div key={`new-${i}`}>
+                <div className="text-xs text-gray-500 mb-2">{hunk.header}</div>
+                {hunk.newLines.map((line, j) => (
+                  <div
+                    key={`new-${i}-${j}`}
                     className={cn(
-                      "font-mono text-sm whitespace-pre leading-6",
-                      line.startsWith('+') && "bg-green-950/20 hover:bg-green-950/30"
+                      "flex",
+                      line.type === 'added' && "bg-green-950/20 text-green-400"
                     )}
                   >
-                    <div className="flex items-start">
-                      <span className="w-12 text-right text-gray-500 pr-4 select-none flex-none">
-                        {lineNumber}
-                      </span>
-                      <SyntaxHighlighter
-                        language={getLanguage()}
-                        style={vscDarkPlus}
-                        customStyle={{
-                          background: 'transparent',
-                          margin: 0,
-                          padding: 0,
-                          display: 'inline',
-                        }}
-                      >
-                        {line.startsWith('+') ? line.slice(1) : line}
-                      </SyntaxHighlighter>
-                    </div>
+                    <span className="w-12 text-right text-gray-500 pr-4 select-none">
+                      {hunk.newStart + j}
+                    </span>
+                    <span className="flex-1">{line.content}</span>
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                ))}
+              </div>
+            ))}
+          </pre>
         </div>
       </div>
     </div>

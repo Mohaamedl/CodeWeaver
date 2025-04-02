@@ -10,7 +10,79 @@ from backend.chat_memory import ChatMemory
 logger = logging.getLogger(__name__)
 
 class LintingAgent(BaseAgent):
-    """Agent that checks code for lint issues (e.g., print statements, style inconsistencies)."""
+    def _create_patch(self, content: str, file_path: str) -> Optional[Dict[str, Any]]:
+        """Create a clean patch to convert prints to logging."""
+        try:
+            tree = ast.parse(content)
+            content_lines = content.splitlines(keepends=True)
+            
+            # Find imports and prints
+            has_logging = False
+            has_logger = False
+            print_nodes = []
+            logging_lines = set()
+            
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    if any(n.name == 'logging' for n in node.names):
+                        has_logging = True
+                elif isinstance(node, ast.Assign):
+                    if isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'logger':
+                        has_logger = True
+                elif isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name):
+                        if node.func.id == 'print':
+                            print_nodes.append(node)
+                            continue
+                    if (isinstance(node.func, ast.Attribute) and
+                        isinstance(node.func.value, ast.Name) and
+                        node.func.value.id == 'logger'):
+                        logging_lines.add(node.lineno)
+
+            # Skip if no prints or if already logged
+            if not print_nodes or all(node.lineno in logging_lines for node in print_nodes):
+                return None
+
+            # Create clean patch
+            new_lines = content_lines.copy()
+            offset = 0
+            
+            # Add imports if needed
+            if not has_logging:
+                new_lines.insert(0, 'import logging\n')
+                offset += 1
+            if not has_logger:
+                new_lines.insert(offset, 'logger = logging.getLogger(__name__)\n')
+                offset += 1
+            
+            # Replace prints not followed by logging
+            for node in print_nodes:
+                if node.lineno not in logging_lines:
+                    line_no = node.lineno - 1 + offset
+                    indent = len(content_lines[node.lineno - 1]) - len(content_lines[node.lineno - 1].lstrip())
+                    args = [ast.unparse(arg) for arg in node.args]
+                    log_msg = f"{' ' * indent}logger.info({', '.join(args)})\n"
+                    new_lines[line_no] = log_msg
+
+            # Generate minimal diff
+            diff = list(difflib.unified_diff(
+                content_lines,
+                new_lines,
+                fromfile=f"a/{file_path}",
+                tofile=f"b/{file_path}",
+                n=0  # No context lines
+            ))
+
+            if diff:
+                return {
+                    'message': f"Replace redundant print statements with logging in {file_path}",
+                    'file_path': file_path,
+                    'patch': '\n'.join(diff)
+                }
+
+        except Exception as e:
+            logger.error(f"Error creating patch: {e}")
+        return None
 
     async def analyze_files(
         self,

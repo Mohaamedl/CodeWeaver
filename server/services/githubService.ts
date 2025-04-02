@@ -3,6 +3,29 @@ import axios from 'axios';
 
 const GITHUB_API_URL = 'https://api.github.com';
 
+interface RepoAnalysis {
+  shouldClone: boolean;
+  reason: string;
+  metadata: {
+    size: number;
+    fileCount: number;
+    primaryLanguage: string;
+    hasHistory: boolean;
+  };
+}
+
+interface RepoAnalysisResult {
+  shouldClone: boolean;
+  reason: string;
+  metadata: {
+    fileCount: number;
+    sizeInMB: number;
+    hasHistory: boolean;
+    estimatedApiCalls: number;
+    primaryLanguage: string;
+  };
+}
+
 export class GitHubService {
   /**
    * Exchanges the authorization code for an access token
@@ -251,6 +274,12 @@ export class GitHubService {
     body: string
   ): Promise<any> {
     try {
+      // Analyze repository before proceeding
+      const analysis = await this.analyzeRepository(accessToken, owner, repo);
+      if (analysis.shouldClone) {
+        throw new Error(`Repository analysis suggests cloning: ${analysis.reason}`);
+      }
+
       // First check if a PR already exists for this branch
       const existingPRs = await axios.get(
         `${GITHUB_API_URL}/repos/${owner}/${repo}/pulls`,
@@ -473,6 +502,115 @@ export class GitHubService {
     } finally {
       // Cleanup
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Gets repository metadata
+   */
+  async getRepositoryMetadata(accessToken: string, owner: string, repo: string) {
+    const response = await axios.get(`${GITHUB_API_URL}/repos/${owner}/${repo}`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    return response.data;
+  }
+
+  /**
+   * Gets repository languages
+   */
+  async getRepositoryLanguages(accessToken: string, owner: string, repo: string) {
+    const response = await axios.get(
+      `${GITHUB_API_URL}/repos/${owner}/${repo}/languages`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  /**
+   * Analyzes a repository for cloning decisions
+   */
+  async analyzeRepository(
+    accessToken: string,
+    owner: string,
+    repo: string
+  ): Promise<RepoAnalysisResult> {
+    try {
+      // Get repository metadata first
+      const repoData = await this.getRepositoryMetadata(accessToken, owner, repo);
+      const sizeInMB = repoData.size / 1024; // Convert KB to MB
+
+      // Get file count from tree
+      const tree = await this.getRepositoryTree(accessToken, owner, repo);
+      const fileCount = tree.tree.length;
+
+      // Get primary language
+      const languages = await this.getRepositoryLanguages(accessToken, owner, repo);
+      const primaryLanguage = Object.entries(languages)
+        .sort((a, b) => b[1] - a[1])[0]?.[0] || 'unknown';
+
+      // Estimate API calls needed (2 calls per file + overhead)
+      const estimatedApiCalls = (fileCount * 2) + 10;
+
+      // Decision making based on criteria
+      let shouldClone = false;
+      let reasons: string[] = [];
+
+      // 1. File count check - Stricter thresholds
+      if (fileCount > 500) {
+        shouldClone = true;
+        reasons.push(`Repository has ${fileCount} files (over 500 threshold) - will clone`);
+      }
+
+      // 2. Size check - Consider medium-sized repos
+      if (sizeInMB > 10) { // Lowered from 50MB to 10MB
+        shouldClone = true;
+        reasons.push(`Repository size is ${sizeInMB.toFixed(1)}MB (exceeds 10MB) - will clone`);
+      }
+
+      // 3. History check - More aggressive cloning
+      const hasHistory = repoData.has_wiki || repoData.has_pages || repoData.forks_count > 0;
+      if (hasHistory) {
+        shouldClone = true;
+        reasons.push('Repository has history - will clone');
+      }
+
+      // 4. Rate limit check - More conservative
+      if (estimatedApiCalls > 1000) { // Lowered threshold significantly
+        shouldClone = true;
+        reasons.push(`Estimated ${estimatedApiCalls} API calls - will clone`);
+      }
+
+      // Log the decision process
+      console.log('Repository analysis:', {
+        owner,
+        repo,
+        fileCount,
+        sizeInMB,
+        estimatedApiCalls,
+        shouldClone,
+        reasons
+      });
+
+      return {
+        shouldClone,
+        reason: reasons.join('; '),
+        metadata: {
+          fileCount,
+          sizeInMB,
+          hasHistory,
+          estimatedApiCalls,
+          primaryLanguage
+        }
+      };
+    } catch (error) {
+      console.error('Error analyzing repository:', error);
+      throw error;
     }
   }
 }

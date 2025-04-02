@@ -17,3 +17,4 @@ shared/multi-agent-framework/backend/db/database.db
 .__pycache__
 .pyc 
 *.pyc 
+shared/multi_agent_framework_v2/repositories

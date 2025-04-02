@@ -260,7 +260,7 @@ export function ReviewPanel({ suggestions, sessionId }: ReviewPanelProps) {
 
       {/* Comparison Dialog */}
       <Dialog open={isCompareDialogOpen} onOpenChange={setIsCompareDialogOpen}>
-        <DialogContent className="max-w-7xl h-[80vh]">
+        <DialogContent className="max-w-8xl h-[80vh]">
           <DialogHeader>
             <DialogTitle>Compare Selected Changes</DialogTitle>
             <DialogDescription>
@@ -283,19 +283,11 @@ export function ReviewPanel({ suggestions, sessionId }: ReviewPanelProps) {
                   </Button>
                 </div>
                 {suggestion.patch && (
-                  <div className="grid grid-cols-2 gap-4 border rounded-lg p-4 bg-muted/5">
-                    <div>
-                      <h4 className="text-sm font-medium mb-2">Original</h4>
-                      <div className="rounded-md border bg-background p-4 overflow-auto max-h-[500px]">
-                        <DiffViewer 
-                          patch={suggestion.patch}
-                          mode="original"
-                        />
-                      </div>
-                    </div>
+                  <div className="grid grid-cols-1 gap-4 border rounded-lg p-4 bg-muted/5">
+                    
                     <div>
                       <h4 className="text-sm font-medium mb-2">Modified</h4>
-                      <div className="rounded-md border bg-background p-4 overflow-auto max-h-[500px]">
+                      <div className="rounded-md border bg-background p-4 overflow-auto max-h-[1000px]">
                         <DiffViewer 
                           patch={suggestion.patch}
                           mode="modified"
