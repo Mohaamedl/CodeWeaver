@@ -221,4 +221,4 @@ If MongoDB connection fails, the application will automatically fall back to in-
 
 ## License
 
-[MIT License](LICENSE)
+[GNU Lesser General Public License](LICENSE)
