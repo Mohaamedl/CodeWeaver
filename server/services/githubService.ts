@@ -27,6 +27,51 @@ interface RepoAnalysisResult {
 }
 
 export class GitHubService {
+  private validateGitHubIdentifier(value: string, label: string): string {
+    const trimmed = value?.trim();
+    if (!trimmed || !/^[A-Za-z0-9_.-]+$/.test(trimmed)) {
+      throw new Error(`Invalid GitHub ${label}`);
+    }
+    return trimmed;
+  }
+
+  private validateGitHubRef(value: string, label: string): string {
+    const trimmed = value?.trim();
+    if (
+      !trimmed ||
+      !/^[A-Za-z0-9._/-]+$/.test(trimmed) ||
+      trimmed.includes('..') ||
+      trimmed.startsWith('/') ||
+      trimmed.endsWith('/')
+    ) {
+      throw new Error(`Invalid GitHub ${label}`);
+    }
+    return trimmed;
+  }
+
+  private encodeRefForUrl(ref: string): string {
+    return ref.split('/').map((part) => encodeURIComponent(part)).join('/');
+  }
+
+  private sanitizeGitHubPath(pathValue: string): string {
+    if (pathValue.includes('\\')) {
+      throw new Error('Invalid repository path');
+    }
+
+    const segments = pathValue.split('/').filter((segment) => segment.length > 0);
+    if (segments.some((segment) => segment === '.' || segment === '..')) {
+      throw new Error('Invalid repository path');
+    }
+
+    return segments.map((segment) => encodeURIComponent(segment)).join('/');
+  }
+
+  private buildRepoUrl(owner: string, repo: string, endpoint: string = ''): string {
+    const safeOwner = encodeURIComponent(this.validateGitHubIdentifier(owner, 'owner'));
+    const safeRepo = encodeURIComponent(this.validateGitHubIdentifier(repo, 'repository'));
+    return `${GITHUB_API_URL}/repos/${safeOwner}/${safeRepo}${endpoint}`;
+  }
+
   /**
    * Exchanges the authorization code for an access token
    */
@@ -111,9 +156,10 @@ export class GitHubService {
     path: string = ''
   ): Promise<GitHubDirectoryItem[]> {
     try {
-      const url = path
-        ? `${GITHUB_API_URL}/repos/${owner}/${repo}/contents/${path}`
-        : `${GITHUB_API_URL}/repos/${owner}/${repo}/contents`;
+      const safePath = path ? this.sanitizeGitHubPath(path) : '';
+      const url = safePath
+        ? this.buildRepoUrl(owner, repo, `/contents/${safePath}`)
+        : this.buildRepoUrl(owner, repo, '/contents');
 
       const response = await axios.get(url, {
         headers: {
@@ -139,17 +185,17 @@ export class GitHubService {
   ): Promise<GitHubTree> {
     try {
       // First get the default branch
-      const repoResponse = await axios.get(`${GITHUB_API_URL}/repos/${owner}/${repo}`, {
+      const repoResponse = await axios.get(this.buildRepoUrl(owner, repo), {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
       });
 
-      const defaultBranch = repoResponse.data.default_branch;
+      const defaultBranch = this.validateGitHubRef(repoResponse.data.default_branch, 'default branch');
 
       // Then get the tree using the default branch
       const response = await axios.get(
-        `${GITHUB_API_URL}/repos/${owner}/${repo}/git/trees/${defaultBranch}`, {
+        this.buildRepoUrl(owner, repo, `/git/trees/${this.encodeRefForUrl(defaultBranch)}`), {
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
@@ -176,8 +222,9 @@ export class GitHubService {
     path: string
   ): Promise<string> {
     try {
+      const safePath = this.sanitizeGitHubPath(path);
       const response = await axios.get(
-        `${GITHUB_API_URL}/repos/${owner}/${repo}/contents/${path}`,
+        this.buildRepoUrl(owner, repo, `/contents/${safePath}`),
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -202,7 +249,7 @@ export class GitHubService {
    */
   async getBranches(accessToken: string, owner: string, repo: string): Promise<string[]> {
     const response = await axios.get(
-      `https://api.github.com/repos/${owner}/${repo}/branches`,
+      this.buildRepoUrl(owner, repo, '/branches'),
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -224,9 +271,12 @@ export class GitHubService {
     newBranch: string
   ): Promise<any> {
     try {
+      const safeBaseBranch = this.validateGitHubRef(baseBranch, 'base branch');
+      const safeNewBranch = this.validateGitHubRef(newBranch, 'new branch');
+
       // First get the SHA of the base branch
       const baseRef = await axios.get(
-        `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${baseBranch}`,
+        this.buildRepoUrl(owner, repo, `/git/refs/heads/${this.encodeRefForUrl(safeBaseBranch)}`),
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -238,9 +288,9 @@ export class GitHubService {
 
       // Create the new branch
       const response = await axios.post(
-        `https://api.github.com/repos/${owner}/${repo}/git/refs`,
+        this.buildRepoUrl(owner, repo, '/git/refs'),
         {
-          ref: `refs/heads/${newBranch}`,
+          ref: `refs/heads/${safeNewBranch}`,
           sha: baseRef.data.object.sha,
         },
         {
@@ -282,7 +332,7 @@ export class GitHubService {
 
       // First check if a PR already exists for this branch
       const existingPRs = await axios.get(
-        `${GITHUB_API_URL}/repos/${owner}/${repo}/pulls`,
+        this.buildRepoUrl(owner, repo, '/pulls'),
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -303,7 +353,7 @@ export class GitHubService {
 
       // Create new PR if none exists
       const response = await axios.post(
-        `${GITHUB_API_URL}/repos/${owner}/${repo}/pulls`,
+        this.buildRepoUrl(owner, repo, '/pulls'),
         {
           title,
           body,
@@ -352,7 +402,7 @@ export class GitHubService {
     base: string
   ): Promise<any[]> {
     const response = await axios.get(
-      `${GITHUB_API_URL}/repos/${owner}/${repo}/pulls`,
+      this.buildRepoUrl(owner, repo, '/pulls'),
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -378,8 +428,9 @@ export class GitHubService {
     branchName: string
   ): Promise<boolean> {
     try {
+      const safeBranch = this.validateGitHubRef(branchName, 'branch name');
       await axios.get(
-        `${GITHUB_API_URL}/repos/${owner}/${repo}/git/refs/heads/${branchName}`,
+        this.buildRepoUrl(owner, repo, `/git/refs/heads/${this.encodeRefForUrl(safeBranch)}`),
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -409,25 +460,30 @@ export class GitHubService {
     branch: string
   ): Promise<void> {
     try {
+      const safePath = this.sanitizeGitHubPath(path);
+      const safeBranch = this.validateGitHubRef(branch, 'branch name');
       // Get current file to get its SHA
       const currentFile = await axios.get(
-        `${GITHUB_API_URL}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,
+        this.buildRepoUrl(owner, repo, `/contents/${safePath}`),
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,
             Accept: 'application/vnd.github.v3+json',
+          },
+          params: {
+            ref: safeBranch,
           },
         }
       );
 
       // Update file
       await axios.put(
-        `${GITHUB_API_URL}/repos/${owner}/${repo}/contents/${path}`,
+        this.buildRepoUrl(owner, repo, `/contents/${safePath}`),
         {
           message,
           content: Buffer.from(content).toString('base64'),
           sha: currentFile.data.sha,
-          branch
+          branch: safeBranch
         },
         {
           headers: {
@@ -509,7 +565,7 @@ export class GitHubService {
    * Gets repository metadata
    */
   async getRepositoryMetadata(accessToken: string, owner: string, repo: string) {
-    const response = await axios.get(`${GITHUB_API_URL}/repos/${owner}/${repo}`, {
+    const response = await axios.get(this.buildRepoUrl(owner, repo), {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -522,7 +578,7 @@ export class GitHubService {
    */
   async getRepositoryLanguages(accessToken: string, owner: string, repo: string) {
     const response = await axios.get(
-      `${GITHUB_API_URL}/repos/${owner}/${repo}/languages`,
+      this.buildRepoUrl(owner, repo, '/languages'),
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,

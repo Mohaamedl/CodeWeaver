@@ -1,4 +1,5 @@
 import express, { type Express } from "express";
+import rateLimit from "express-rate-limit";
 import session from "express-session";
 import { createServer, type Server } from "http";
 import githubController from "./controllers/githubController";
@@ -40,11 +41,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   };
 
+  const repositoryContentsLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
   // GitHub repository routes
   app.get("/api/repositories", checkAuth, githubController.listRepositories.bind(githubController));
   app.get("/api/repository/:owner/:repo/tree", checkAuth, githubController.getRepositoryTree.bind(githubController));
   app.get("/api/repository/:owner/:repo/path", checkAuth, githubController.getRepositoryPath.bind(githubController));
-  app.get("/api/repository/:owner/:repo/contents/:path(*)", checkAuth, githubController.getFileContents.bind(githubController));
+  app.get(
+    "/api/repository/:owner/:repo/contents/:path(*)",
+    checkAuth,
+    repositoryContentsLimiter,
+    githubController.getFileContents.bind(githubController)
+  );
 
   // OpenAI analysis routes
   app.post("/api/analyze", checkAuth, openaiController.analyzeRepository.bind(openaiController));

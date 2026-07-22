@@ -7,6 +7,34 @@ import githubService from '../services/githubService';
 import { storage } from '../storage';
 
 export class GitHubController {
+  private validateRepoCoordinates(owner: string, repo: string): { owner: string; repo: string } {
+    const segmentPattern = /^[A-Za-z0-9_.-]+$/;
+    const safeOwner = owner?.trim();
+    const safeRepo = repo?.trim();
+
+    if (!safeOwner || !segmentPattern.test(safeOwner)) {
+      throw new Error('Invalid repository owner');
+    }
+
+    if (!safeRepo || !segmentPattern.test(safeRepo)) {
+      throw new Error('Invalid repository name');
+    }
+
+    return { owner: safeOwner, repo: safeRepo };
+  }
+
+  private buildLocalRepoPath(owner: string, repo: string): string {
+    const { owner: safeOwner, repo: safeRepo } = this.validateRepoCoordinates(owner, repo);
+    const repositoriesRoot = path.resolve(process.cwd(), 'repositories');
+    const localPath = path.resolve(repositoriesRoot, safeOwner, safeRepo);
+
+    if (!localPath.startsWith(`${repositoriesRoot}${path.sep}`)) {
+      throw new Error('Invalid repository path');
+    }
+
+    return localPath;
+  }
+
   /**
    * Helper to get GitHub token from session or Auth header
    */
@@ -234,7 +262,7 @@ export class GitHubController {
    */
   async getRepositoryPath(req: Request, res: Response) {
     try {
-      const { owner, repo } = req.params;
+      const { owner, repo } = this.validateRepoCoordinates(req.params.owner, req.params.repo);
       const accessToken = this.getGitHubToken(req);
       if (!accessToken) {
         return res.status(401).json({ message: 'GitHub authentication required' });
@@ -252,7 +280,7 @@ export class GitHubController {
       }
 
       // Return status update with analysis
-      const repoPath = path.join(process.cwd(), 'repositories', owner, repo);
+      const repoPath = this.buildLocalRepoPath(owner, repo);
       
       if (analysis.shouldClone) {
         // Check if already cloned
@@ -289,7 +317,7 @@ export class GitHubController {
    */
   async getRepositoryData(req: Request, res: Response) {
     try {
-      const { owner, repo } = req.params;
+      const { owner, repo } = this.validateRepoCoordinates(req.params.owner, req.params.repo);
       const accessToken = this.getGitHubToken(req);
       if (!accessToken) {
         return res.status(401).json({ message: 'GitHub authentication required' });
@@ -300,7 +328,7 @@ export class GitHubController {
       
       if (analysis.shouldClone) {
         // Use cloning approach
-        const repoPath = path.join(process.cwd(), 'repositories', owner, repo);
+        const repoPath = this.buildLocalRepoPath(owner, repo);
         await this.cloneRepository(owner, repo);
         return res.json({
           method: 'clone',
@@ -326,7 +354,8 @@ export class GitHubController {
    * Optimize repository cloning
    */
   private async cloneRepository(owner: string, repo: string): Promise<string> {
-    const repoPath = path.join(process.cwd(), "repositories", owner, repo);
+    const { owner: safeOwner, repo: safeRepo } = this.validateRepoCoordinates(owner, repo);
+    const repoPath = this.buildLocalRepoPath(safeOwner, safeRepo);
     await fs.promises.mkdir(path.dirname(repoPath), { recursive: true });
 
     const git = simpleGit();
@@ -335,7 +364,7 @@ export class GitHubController {
       await git.cwd(repoPath).pull(['--depth', '1', '--no-tags']);
     } else {
       // Shallow clone for efficiency
-      await git.clone(`https://github.com/${owner}/${repo}.git`, repoPath, [
+      await git.clone(`https://github.com/${safeOwner}/${safeRepo}.git`, repoPath, [
         '--depth', '1',
         '--no-tags',
         '--no-single-branch'
